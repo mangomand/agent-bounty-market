@@ -6,3 +6,10 @@ out = "out"
 libs = ["lib"]
 solc_version = "0.8.28"
 remappings = ["@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/", "forge-std/=lib/forge-std/src/"]
+
+[fuzz]
+runs = 256
+
+[lint]
+# Deadlines and receipt expiry are minutes-to-days; validator timestamp skew is seconds.
+exclude_lints = ["block-timestamp"]
