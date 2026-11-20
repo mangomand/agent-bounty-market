@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { parseUnits } from "viem";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createServer as createMcpServer, httpApi } from "@abm/mcp";
 import {
@@ -15,6 +16,7 @@ import {
   type Hex,
   idSchema,
   postReceiptsSchema,
+  refundBountySchema,
   requestRunSchema,
   type ApiBounty,
   type ApiEvent,
@@ -97,7 +99,7 @@ export function createApp(opts: AppOptions) {
     const row = db.prepare("SELECT * FROM bounties WHERE id = ?").get(id);
     if (!row) return null;
     const { n } = db.prepare("SELECT COUNT(*) AS n FROM submissions WHERE bounty_id = ?").get(id) as { n: number };
-    return toBounty(row, Number(n));
+    return toBounty(row, Number(n), now());
   };
   const mustBounty = (id: string) => {
     const b = getBounty(id);
@@ -362,6 +364,37 @@ export function createApp(opts: AppOptions) {
     }
     const bounty = mustBounty(b.id);
     emit({ type: "bounty.updated", bountyId: b.id, bounty });
+    return c.json({ bounty });
+  });
+
+  /**
+   * Records the creator's onchain refund. The creator's wallet already sent `refund`; the API reads
+   * BountyRefunded from the tx itself. Offchain (no chain), it applies the contract's own rule.
+   */
+  app.post("/bounties/:id/refund", async (c) => {
+    const id = bountyId(c);
+    const body = parse(refundBountySchema, await jsonBody(c));
+    const pre = mustBounty(id);
+    if (body.creator.toLowerCase() !== pre.creator.toLowerCase())
+      throw new HttpError(403, "not_creator", "only the bounty creator can refund");
+    if (pre.state !== "OPEN") throw new HttpError(409, "bounty_closed", `bounty is ${pre.state}`);
+    if (!pre.onchainId) throw new HttpError(409, "not_funded", "bounty is not funded onchain");
+    if (chain) {
+      const refunded = await chainCall(() => chain.verifyRefund(body.txHash, pre.onchainId!));
+      if (refunded.from.toLowerCase() !== pre.creator.toLowerCase() || refunded.creator.toLowerCase() !== pre.creator.toLowerCase())
+        throw new HttpError(403, "not_creator", "refund tx was not sent by the bounty creator");
+      if (refunded.amount !== parseUnits(pre.amountUsdc, 6))
+        throw new HttpError(422, "onchain_mismatch", "refunded amount does not match the bounty");
+    } else if (!pre.canRefund) {
+      throw new HttpError(409, "deadline_not_reached", "a bounty can only be refunded after its deadline");
+    }
+    const bounty = tx(() => {
+      const b = mustBounty(id);
+      if (b.state !== "OPEN") throw new HttpError(409, "bounty_closed", `bounty is ${b.state}`);
+      db.prepare("UPDATE bounties SET state = 'REFUNDED', refund_tx_hash = ? WHERE id = ?").run(body.txHash, b.id);
+      return mustBounty(b.id);
+    });
+    emit({ type: "bounty.updated", bountyId: bounty.id, bounty });
     return c.json({ bounty });
   });
 

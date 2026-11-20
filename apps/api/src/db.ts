@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS bounties (
   fund_tx_hash TEXT,
   accepted_submission_id TEXT,
   payout_tx_hash TEXT,
+  refund_tx_hash TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS submissions (
@@ -98,6 +99,7 @@ const MIGRATIONS: [table: string, column: string, decl: string][] = [
   ["receipts", "digest", "TEXT"],
   ["receipts", "tx_hash", "TEXT"],
   ["runs", "logs", "TEXT"],
+  ["bounties", "refund_tx_hash", "TEXT"],
 ];
 
 export function openDb(path: string): Db {
@@ -126,8 +128,13 @@ type Row = Record<string, unknown>;
 const str = (v: unknown) => v as string;
 const strOrNull = (v: unknown) => (v ?? null) as string | null;
 
-export function toBounty(r: Row, submissionCount: number): ApiBounty {
-  return {
+/** Mirrors `BountyEscrow.refund`: open, funded, and strictly past the deadline. */
+export function canRefund(b: Pick<ApiBounty, "state" | "onchainId" | "deadline">, nowSec: number): boolean {
+  return b.state === "OPEN" && b.onchainId !== null && nowSec > b.deadline;
+}
+
+export function toBounty(r: Row, submissionCount: number, nowSec: number = now()): ApiBounty {
+  const b: Omit<ApiBounty, "canRefund"> = {
     id: str(r.id),
     title: str(r.title),
     description: str(r.description),
@@ -146,9 +153,11 @@ export function toBounty(r: Row, submissionCount: number): ApiBounty {
     fundTxHash: strOrNull(r.fund_tx_hash) as Hex | null,
     acceptedSubmissionId: strOrNull(r.accepted_submission_id),
     payoutTxHash: strOrNull(r.payout_tx_hash) as Hex | null,
+    refundTxHash: strOrNull(r.refund_tx_hash) as Hex | null,
     createdAt: Number(r.created_at),
     submissionCount,
   };
+  return { ...b, canRefund: canRefund(b, nowSec) };
 }
 
 export function toSubmission(r: Row): ApiSubmission {
