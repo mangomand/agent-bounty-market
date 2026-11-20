@@ -132,7 +132,7 @@ function showOutcome(s: any) {
   if (s.lastRun?.logs && s.workflowState !== "SECURITY_REVIEWED") {
     const interesting = String(s.lastRun.logs)
       .split("\n")
-      .filter((l: string) => /not ok|fail|\[block\]|\[warn\]|expected|actual|FAILED|PASSED|^\s{4}\S/.test(l) && !/\((?:node|file):/.test(l))
+      .filter((l: string) => /not ok|fail|^(?:HIGH|MEDIUM|LOW) \[|expected|actual|passed:|^\s{4}\S/.test(l) && !/\((?:node|file):/.test(l))
       .slice(0, 14)
       .join("\n");
     console.log(indent(interesting || String(s.lastRun.logs).slice(-800)));
