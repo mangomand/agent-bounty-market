@@ -19,17 +19,17 @@ function dockerAvailable(): boolean {
 
 // Needs a running Docker daemon and the default image pulled locally.
 describe.skipIf(!dockerAvailable())("docker integration", () => {
-  it("builds and tests a snapshot with no network", async () => {
+  it("builds and tests a snapshot as non-root, with limits and no network", async () => {
     const repo = await mkdtemp(join(tmpdir(), "abm-int-repo-"));
     try {
       await writeFile(join(repo, "test.js"), "require('node:assert').equal(1 + 1, 2); console.log('ok');\n");
       const res = await runSubmission(
         {
           bountyId: "1",
-          submissionId: "int-1",
+          submissionId: "1",
           snapshotPath: repo,
           commitHash: "0123456789abcdef0123456789abcdef01234567",
-          buildCommand: "touch built && id -u",
+          buildCommand: "touch built && id -u && cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max",
           // The fetch must fail: the sandbox has no network.
           testCommand: "test -f built && node test.js && node -e \"fetch('http://example.com').then(() => process.exit(1), () => process.exit(0))\"",
           runnerVersion: "runner-0.1.0",
@@ -43,7 +43,8 @@ describe.skipIf(!dockerAvailable())("docker integration", () => {
         },
       );
       expect(res.build.status).toBe("passed");
-      expect(res.build.stdout.trim()).toBe("65534");
+      // Non-root, 1 GiB memory cap, 256 pid cap (DEFAULT_LIMITS).
+      expect(res.build.stdout.trim().split("\n")).toEqual(["65534", String(1024 * 1024 * 1024), "256"]);
       expect(res.test.status).toBe("passed");
       expect(res.receipts.every((r) => r.receipt.result)).toBe(true);
     } finally {
