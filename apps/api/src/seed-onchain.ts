@@ -38,7 +38,7 @@ const funded: Record<string, DemoFunding> = {};
 for (const b of DEMO) {
   if (already.has(b.id)) continue;
   const amount = parseUnits(b.amountUsdc, 6);
-  const deadline = demoDeadline(nowSec);
+  const deadline = demoDeadline(nowSec, b);
   const { specHash, testSuiteHash } = demoHashes(b);
   const approve = await wallet.writeContract({ address: usdc, abi: mockUsdcAbi, functionName: "approve", args: [escrow, amount] });
   await pub.waitForTransactionReceipt({ hash: approve });

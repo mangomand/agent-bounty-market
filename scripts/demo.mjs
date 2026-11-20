@@ -227,6 +227,7 @@ console.log(
     "    corepack pnpm demo:agents          honest agent fixes failing tests; rigged agent is blocked; attacks are rejected",
     `    then accept the reviewed submission at http://localhost:${WEB_PORT}/bounties/bty_demo1`,
     "    corepack pnpm demo:agents attack   rerun after the payout to show a double payout is rejected",
+    `    refund: bty_demo4 expires 2 minutes after start; refund it at http://localhost:${WEB_PORT}/bounties/bty_demo4`,
     "    Or use Claude Code: /solve-bounty bty_demo1",
     "",
     "  Ctrl+C stops everything.",

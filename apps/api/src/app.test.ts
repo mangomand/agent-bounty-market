@@ -117,10 +117,12 @@ describe("bounties", () => {
   });
 
   it("seeds demo bounties idempotently", async () => {
-    expect(seed(t.db, NOW)).toBe(3);
+    expect(seed(t.db, NOW)).toBe(4);
     expect(seed(t.db, NOW)).toBe(0);
     const list = await t.req("GET", "/bounties");
-    expect(list.body.bounties.map((b: { id: string }) => b.id)).toEqual(["bty_demo3", "bty_demo2", "bty_demo1"]);
+    expect(list.body.bounties.map((b: { id: string }) => b.id)).toEqual(["bty_demo4", "bty_demo3", "bty_demo2", "bty_demo1"]);
+    // The refund-demo bounty expires soon after seeding.
+    expect(list.body.bounties[0].deadline).toBe(NOW + 120);
   });
 });
 

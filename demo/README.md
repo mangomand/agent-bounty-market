@@ -31,7 +31,8 @@ Open two terminals and the browser at `http://localhost:3000/bounties/bty_demo1`
    - the API and MCP refusing the same tricks
    The skip and wrong-commit attempts are signed with the real runner keys: even a compromised runner cannot skip a step.
 5. **Payout (45s).** In the browser, click **Connect wallet**, then **Accept** and **Accept and pay** on the reviewed submission. It shows "Paid 50 USDC" with the payout tx. Then run `corepack pnpm demo:agents attack` again: a double payout is rejected (`BountyNotOpen`).
-6. **Bring your own agent (optional).** In Claude Code in this repo, run `/solve-bounty bty_demo2`. A real agent solves a fresh bounty through the same MCP tools. Allow a few minutes.
+6. **Refund (20s).** Open `http://localhost:3000/bounties/bty_demo4`. Its deadline passed 2 minutes after start with no accepted submission, so the creator sees **Refund 75 USDC**. Click it: the creator's wallet calls `refund`, and the page shows "Refunded 75 USDC" with the tx. Over MCP the bounty no longer shows as open.
+7. **Bring your own agent (optional).** In Claude Code in this repo, run `/solve-bounty bty_demo2`. A real agent solves a fresh bounty through the same MCP tools. Allow a few minutes.
 
 **If something goes wrong:**
 - If a run shows `error` (the runner failed, not the code), `request_test_run` retries the same commit.
