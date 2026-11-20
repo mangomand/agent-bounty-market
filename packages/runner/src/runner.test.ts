@@ -39,7 +39,7 @@ class FakeExecutor implements SandboxExecutor {
 let snapshot: string;
 const input = (): SubmissionInput => ({
   bountyId: "7",
-  submissionId: "sub-42",
+  submissionId: "42",
   snapshotPath: snapshot,
   commitHash: "0123456789abcdef0123456789abcdef01234567",
   buildCommand: "npm run build",
@@ -73,7 +73,8 @@ describe("runSubmission with a fake executor", () => {
       ["TestReceipt", true],
     ]);
     for (const r of res.receipts) {
-      expect(r.receipt).toMatchObject({ bountyId: "7", submissionId: "sub-42", commitHash: input().commitHash, timestamp: 1_800_000_000, expiry: 1_800_000_600 });
+      expect(r.receipt).toMatchObject({ bountyId: "7", submissionId: "42", commitHash: input().commitHash, timestamp: 1_800_000_000, expiry: 1_800_000_600 });
+      expect(r.message).toMatchObject({ bountyId: 7n, submissionId: 42n, commitHash: `0x${"0".repeat(24)}${input().commitHash}` });
       expect(await recoverReceiptSigner(r, signing)).toBe(signer.address);
     }
   });
@@ -114,6 +115,8 @@ describe("runSubmission with a fake executor", () => {
     const fake = new FakeExecutor({});
     await expect(runSubmission({ ...input(), commitHash: "main; rm -rf /" }, { signing, signer, executor: fake })).rejects.toThrow(/commitHash/);
     await expect(runSubmission({ ...input(), bountyId: "../x" }, { signing, signer, executor: fake })).rejects.toThrow(/bountyId/);
+    await expect(runSubmission({ ...input(), submissionId: "sub-42" }, { signing, signer, executor: fake })).rejects.toThrow(/submissionId/);
+    await expect(runSubmission({ ...input(), commitHash: "0123abc" }, { signing, signer, executor: fake })).rejects.toThrow(/commitHash/);
     expect(fake.specs).toHaveLength(0);
   });
 

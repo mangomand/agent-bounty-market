@@ -6,7 +6,7 @@ import { loadSignerFromEnv, recoverReceiptSigner, signReceipt, SIGNER_ENV_VAR } 
 const ctx = { chainId: 31337, verifyingContract: "0x5FbDB2315678afecb367f032d93F642f64180aa3" } as const;
 const receipt: Receipt = {
   bountyId: "1",
-  submissionId: "sub-1",
+  submissionId: "1",
   commitHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
   receiptType: "TestReceipt",
   runnerVersion: "runner-0.1.0",
@@ -26,9 +26,30 @@ describe("receipt signing", () => {
   it("recovers a different address when any field changes", async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const signed = await signReceipt(account, receipt, ctx);
-    const tampered = { ...signed, receipt: { ...receipt, commitHash: "deadbeefdeadbeef" } };
+    const tampered = { ...signed, message: { ...signed.message, commitHash: `0x${"de".repeat(32)}` as const } };
     expect(await recoverReceiptSigner(tampered, ctx)).not.toBe(account.address);
     expect(await recoverReceiptSigner(signed, { ...ctx, chainId: 1 })).not.toBe(account.address);
+  });
+
+  it("builds the onchain message the contract verifies", async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const { message } = await signReceipt(account, receipt, ctx);
+    expect(message).toEqual({
+      bountyId: 1n,
+      submissionId: 1n,
+      commitHash: `0x000000000000000000000000${receipt.commitHash}`,
+      receiptType: 1,
+      runnerVersion: "runner-0.1.0",
+      result: true,
+      timestamp: 1_800_000_000n,
+      expiry: 1_800_086_400n,
+    });
+  });
+
+  it("rejects ids the contract can't represent", async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    await expect(signReceipt(account, { ...receipt, submissionId: "sub-1" }, ctx)).rejects.toThrow(/uint256/);
+    await expect(signReceipt(account, { ...receipt, commitHash: "abc1234" }, ctx)).rejects.toThrow(/commit/);
   });
 
   it("refuses to sign creator acceptance", async () => {

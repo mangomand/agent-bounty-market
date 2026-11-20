@@ -1,10 +1,22 @@
-import type { Hex, Receipt } from "@abm/shared";
+import {
+  commitHashToBytes32,
+  RECEIPT_TYPE,
+  receiptDomain,
+  receiptPrimaryType,
+  receiptTypes,
+  type Hex,
+  type Receipt,
+  type ReceiptMessage,
+  type ReceiptTypeId,
+} from "@abm/shared";
 import { recoverTypedDataAddress, type Address } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
-import { receiptDomain, receiptTypes, type SignableReceiptType } from "./eip712.js";
 
 export interface SignedReceipt {
+  /** Off-chain view with string ids, as in `@abm/shared`. */
   receipt: Receipt;
+  /** Exact struct that was signed; pass it to `BountyEscrow.submitReceipt`. */
+  message: ReceiptMessage;
   signature: Hex;
   signer: Address;
 }
@@ -29,21 +41,39 @@ export function loadSignerFromEnv(env: NodeJS.ProcessEnv = process.env): Private
   return privateKeyToAccount(key as Hex);
 }
 
-function assertSignable(t: Receipt["receiptType"]): SignableReceiptType {
-  if (t in receiptTypes) return t as SignableReceiptType;
-  throw new Error(`runner cannot sign receipt type ${t}`);
+const TYPE_IDS: Partial<Record<Receipt["receiptType"], ReceiptTypeId>> = {
+  BuildReceipt: RECEIPT_TYPE.Build,
+  TestReceipt: RECEIPT_TYPE.Test,
+  SecurityReviewReceipt: RECEIPT_TYPE.SecurityReview,
+};
+
+function toUint(value: string, field: string): bigint {
+  if (!/^[0-9]{1,78}$/.test(value)) throw new Error(`${field} must be an onchain uint256 id, got ${value}`);
+  return BigInt(value);
 }
 
-function message(receipt: Receipt) {
+/** Converts the off-chain receipt into the struct `BountyEscrow` verifies. */
+export function toReceiptMessage(receipt: Receipt): ReceiptMessage {
+  const receiptType = TYPE_IDS[receipt.receiptType];
+  if (receiptType === undefined) throw new Error(`runner cannot sign receipt type ${receipt.receiptType}`);
   return {
-    bountyId: receipt.bountyId,
-    submissionId: receipt.submissionId,
-    commitHash: receipt.commitHash,
-    receiptType: receipt.receiptType,
+    bountyId: toUint(receipt.bountyId, "bountyId"),
+    submissionId: toUint(receipt.submissionId, "submissionId"),
+    commitHash: commitHashToBytes32(receipt.commitHash),
+    receiptType,
     runnerVersion: receipt.runnerVersion,
     result: receipt.result,
     timestamp: BigInt(receipt.timestamp),
     expiry: BigInt(receipt.expiry),
+  };
+}
+
+function typedData(message: ReceiptMessage, ctx: SigningContext) {
+  return {
+    domain: receiptDomain(ctx.chainId, ctx.verifyingContract),
+    types: receiptTypes,
+    primaryType: receiptPrimaryType(message.receiptType),
+    message,
   };
 }
 
@@ -52,23 +82,14 @@ export async function signReceipt(
   receipt: Receipt,
   ctx: SigningContext,
 ): Promise<SignedReceipt> {
-  const primaryType = assertSignable(receipt.receiptType);
-  const signature = await account.signTypedData({
-    domain: receiptDomain(ctx.chainId, ctx.verifyingContract),
-    types: receiptTypes,
-    primaryType,
-    message: message(receipt),
-  });
-  return { receipt, signature, signer: account.address };
+  const message = toReceiptMessage(receipt);
+  const signature = await account.signTypedData(typedData(message, ctx));
+  return { receipt, message, signature, signer: account.address };
 }
 
-export async function recoverReceiptSigner(signed: Omit<SignedReceipt, "signer">, ctx: SigningContext): Promise<Address> {
-  const primaryType = assertSignable(signed.receipt.receiptType);
-  return recoverTypedDataAddress({
-    domain: receiptDomain(ctx.chainId, ctx.verifyingContract),
-    types: receiptTypes,
-    primaryType,
-    message: message(signed.receipt),
-    signature: signed.signature,
-  });
+export async function recoverReceiptSigner(
+  signed: Pick<SignedReceipt, "message" | "signature">,
+  ctx: SigningContext,
+): Promise<Address> {
+  return recoverTypedDataAddress({ ...typedData(signed.message, ctx), signature: signed.signature });
 }

@@ -65,14 +65,17 @@ export const DEFAULT_TEST_TIMEOUT_MS = 5 * 60_000;
 export const DEFAULT_RECEIPT_TTL_SEC = 24 * 60 * 60;
 export const DEFAULT_MAX_LOG_CHARS = 16_000;
 
-const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-const COMMIT_RE = /^(0x)?[0-9a-fA-F]{7,64}$/;
+/** Ids are the contract's uint256 bounty/submission ids. */
+const UINT_RE = /^[0-9]{1,78}$/;
+/** Full git commit id (SHA-1 or SHA-256); it becomes the onchain bytes32. */
+const COMMIT_RE = /^(0x)?([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/;
+const VERSION_RE = /^[A-Za-z0-9._:+-]{1,64}$/;
 
 export function validateInput(input: SubmissionInput): void {
-  if (!ID_RE.test(input.bountyId)) throw new Error("invalid bountyId");
-  if (!ID_RE.test(input.submissionId)) throw new Error("invalid submissionId");
+  if (!UINT_RE.test(input.bountyId)) throw new Error("invalid bountyId");
+  if (!UINT_RE.test(input.submissionId)) throw new Error("invalid submissionId");
   if (!COMMIT_RE.test(input.commitHash)) throw new Error("invalid commitHash");
-  if (!ID_RE.test(input.runnerVersion)) throw new Error("invalid runnerVersion");
+  if (!VERSION_RE.test(input.runnerVersion)) throw new Error("invalid runnerVersion");
   if (!input.buildCommand.trim()) throw new Error("buildCommand is empty");
   if (!input.testCommand.trim()) throw new Error("testCommand is empty");
 }
