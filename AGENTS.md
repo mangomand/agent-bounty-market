@@ -66,7 +66,8 @@ apps/web/          Minimal creator page (post, fund, accept)
 apps/api/          Local API: index, chain relayer, SSE, and MCP over HTTP at /mcp
 packages/mcp/      MCP tools (served by the API; stdio entry for other clients)
 packages/runner/   Sandbox runner process: Docker (default) or process fallback, signs receipts
-packages/agents/   Security reviewer, scripted demo/adversarial clients, Claude Code setup assets
+packages/agents/   Security reviewer (SECURITY_REVIEWER_MODULE) and scripted demo/adversarial MCP clients (`pnpm demo:agents`)
+.claude/commands/  Claude Code setup assets: /solve-bounty
 packages/shared/   Shared types, EIP-712 schemas, contract ABIs (`@abm/shared/abi`)
 contracts/         Foundry project (src/, test/, script/)
 demo/              Fixture submissions used by `pnpm demo` and the end-to-end test
@@ -138,6 +139,7 @@ pnpm is pinned through `packageManager`. If `pnpm` isn't on PATH, run `corepack 
 ```
 pnpm install
 pnpm demo                # Anvil + deploy + seed + runner + API (:4000, MCP at /mcp) + web (:3000)
+pnpm demo:agents         # against a running demo: honest agent, rigged agent, attacks (`attack` after payout)
 pnpm dev                 # api + web only (bring your own chain/runner env)
 pnpm test                # vitest across all packages (e2e runs when anvil + forge are on PATH)
 pnpm typecheck           # tsc in every package
