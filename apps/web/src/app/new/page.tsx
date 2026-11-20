@@ -53,14 +53,21 @@ export default function NewBountyPage() {
   });
 
   const fund = useMutation({
-    mutationFn: (bounty: BountyView) =>
-      fundBounty({
+    mutationFn: async (bounty: BountyView) => {
+      const hash = await fundBounty({
         specHash: bounty.specHash,
         testSuiteHash: bounty.testSuiteHash,
         amountUsdc: bounty.amountUsdc,
         deadline: bounty.deadline,
-      }),
-    onSuccess: setFundTx,
+      });
+      // The API checks the BountyCreated event before agents can submit.
+      await api().recordFunding(bounty.id, hash);
+      return hash;
+    },
+    onSuccess: (hash) => {
+      setFundTx(hash);
+      void queryClient.invalidateQueries({ queryKey: ["bounties"] });
+    },
   });
 
   const connected = mounted && isConnected && !!address;
