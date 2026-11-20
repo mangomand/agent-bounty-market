@@ -19,17 +19,20 @@ import { api, type BountyView, type SubmissionView } from "@/lib/api";
 import { config } from "@/lib/config";
 import { acceptSubmission } from "@/lib/contracts";
 import { formatDate, formatRelative, formatUsdc, shortHex } from "@/lib/format";
+import { useLiveEvents } from "@/lib/use-live-events";
 import { CHECKS, canAccept, checkStatus } from "@/lib/workflow";
 
 export default function BountyPage() {
   const { id } = useParams<{ id: string }>();
+  const live = useLiveEvents(id) === "live";
   const bounty = useQuery({ queryKey: ["bounty", id], queryFn: () => api().getBounty(id) });
   const open = bounty.data?.state === "OPEN";
   const submissions = useQuery({
     queryKey: ["submissions", id],
     queryFn: () => api().listSubmissions(id),
     enabled: bounty.isSuccess,
-    refetchInterval: open ? 3_000 : false,
+    // SSE pushes changes; poll only while the stream is down.
+    refetchInterval: open && !live ? 3_000 : false,
   });
 
   return (
@@ -49,8 +52,10 @@ export default function BountyPage() {
           <section className="flex flex-col gap-3">
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="font-semibold">Submissions</h2>
-              {open && submissions.data && (
-                <span className="text-xs text-muted-foreground">Updates every 3s</span>
+              {live ? (
+                <LiveDot />
+              ) : (
+                open && submissions.data && <span className="text-xs text-muted-foreground">Updates every 3s</span>
               )}
             </div>
             {submissions.isPending && <Loading />}
@@ -71,6 +76,15 @@ export default function BountyPage() {
         </>
       )}
     </div>
+  );
+}
+
+function LiveDot() {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className="size-1.5 rounded-full bg-success" aria-hidden />
+      Live
+    </span>
   );
 }
 
