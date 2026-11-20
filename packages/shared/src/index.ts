@@ -55,6 +55,7 @@ export function isValidTransition(from: WorkflowState, to: WorkflowState): boole
   return nextState(from) === to;
 }
 
+export * from "./api";
 export * from "./eip712";
 export { bountyEscrowAbi } from "./abi/bountyEscrow";
 export { mockUsdcAbi } from "./abi/mockUsdc";
