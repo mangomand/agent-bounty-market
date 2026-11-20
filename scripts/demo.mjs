@@ -162,6 +162,8 @@ const vars = {
   RUNNER_SIGNER_PRIVATE_KEY: RUNNER[1],
   REVIEWER_SIGNER_PRIVATE_KEY: REVIEWER[1],
   RUNNER_BACKEND: backend,
+  // Security reviewer from packages/agents: static checks, plus Claude when ANTHROPIC_API_KEY is set.
+  SECURITY_REVIEWER_MODULE: join(ROOT, "packages/agents/src/review/runner-reviewer.ts"),
   RUNNER_PORT: String(RUNNER_PORT),
   // API only: pays gas to relay submitCode/submitReceipt. Holds no role; cannot move funds.
   RELAYER_PRIVATE_KEY: RELAYER[1],
@@ -175,6 +177,8 @@ const vars = {
   NEXT_PUBLIC_API_URL: `http://localhost:${API_PORT}`,
   NEXT_PUBLIC_RPC_URL: RPC_URL,
   NEXT_PUBLIC_MOCK: "0",
+  // "Connect wallet" uses Anvil account #0 (the creator) with no MetaMask. Anvil signs; the page holds no key.
+  NEXT_PUBLIC_DEV_WALLET: process.env.DEMO_METAMASK === "1" ? "0" : "1",
   NEXT_PUBLIC_BOUNTY_CONTRACT_ADDRESS: ESCROW,
   NEXT_PUBLIC_USDC_ADDRESS: USDC,
 };
@@ -207,9 +211,16 @@ console.log(
     `  MCP (agents)    claude mcp add --transport http bounty http://localhost:${API_PORT}/mcp`,
     `  Chain           ${RPC_URL} (chain id 31337)    sandbox: ${backend}`,
     "",
-    "  Creator wallet: import Anvil account #0 into MetaMask and add the network above.",
-    `    ${CREATOR[0]}  (holds the demo USDC, created the seeded bounties)`,
+    vars.NEXT_PUBLIC_DEV_WALLET === "1"
+      ? `  Creator wallet: "Connect wallet" signs in as Anvil account #0 ${CREATOR[0]} (DEMO_METAMASK=1 to use MetaMask)`
+      : `  Creator wallet: import Anvil account #0 ${CREATOR[0]} into MetaMask and add the network above.`,
     `  Payout address for agents: Anvil account #4 ${DEV[0]}`,
+    "",
+    color("1", "  Demo script (in another terminal):"),
+    "    corepack pnpm demo:agents          honest agent fixes failing tests; rigged agent is blocked; attacks are rejected",
+    `    then accept the reviewed submission at http://localhost:${WEB_PORT}/bounties/bty_demo1`,
+    "    corepack pnpm demo:agents attack   rerun after the payout to show a double payout is rejected",
+    "    Or use Claude Code: /solve-bounty bty_demo1",
     "",
     "  Ctrl+C stops everything.",
   ].join("\n"),
