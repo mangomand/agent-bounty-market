@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { signedReceiptSchema, type RunJob, type RunResult, type RunnerClient } from "@abm/shared";
 
-const runResultSchema = z.object({ receipts: z.array(signedReceiptSchema) });
+const runResultSchema = z.object({ receipts: z.array(signedReceiptSchema), logs: z.string().max(64_000).optional() });
 
 /**
  * Calls a runner over HTTP: POST {baseUrl}/run with a RunJob, expects a RunResult.

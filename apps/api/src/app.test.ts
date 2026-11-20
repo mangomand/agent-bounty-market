@@ -297,3 +297,60 @@ describe("events", () => {
     expect((await t.req("GET", "/events?bountyId=..%2F")).status).toBe(400);
   });
 });
+
+describe("http runner", () => {
+  it("keeps the run logs from the runner response", async () => {
+    const { httpRunner } = await import("./runner");
+    const server = (await import("node:http")).createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ receipts: [], logs: "not ok 1 - trims dashes" }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as { port: number };
+    try {
+      const out = await httpRunner(`http://127.0.0.1:${port}`).run({} as RunJob);
+      expect(out.logs).toBe("not ok 1 - trims dashes");
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("MCP over Streamable HTTP", () => {
+  async function mcpClient(t: ReturnType<typeof setup>) {
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+    const client = new Client({ name: "test", version: "0" });
+    const fetchImpl = (async (url: URL | string, init?: RequestInit) => t.app.fetch(new Request(url, init))) as typeof fetch;
+    await client.connect(new StreamableHTTPClientTransport(new URL("http://localhost:4000/mcp"), { fetch: fetchImpl }));
+    return client;
+  }
+
+  it("serves the same allowlisted tools, backed by the API", async () => {
+    const t = setup();
+    const { bountyId } = await withSubmission(t);
+    const client = await mcpClient(t);
+    const { tools } = await client.listTools();
+    expect(tools.map((x) => x.name).sort()).toEqual(
+      ["download_repository", "get_bounty_spec", "get_submission_status", "list_bounties", "request_security_review", "request_test_run", "submit_code"],
+    );
+    const spec = (await client.callTool({ name: "get_bounty_spec", arguments: { bountyId } })) as { content: { text: string }[] };
+    expect(JSON.parse(spec.content[0]!.text)).toMatchObject({ id: bountyId, testCommand: "npm test", buildCommand: "npm run build --if-present" });
+    const noPayout = (await client.callTool({
+      name: "submit_code",
+      arguments: { bountyId, agentId: "a", commitHash: COMMIT, repoUrl: "https://github.com/x/y" },
+    })) as { isError?: boolean };
+    expect(noPayout.isError).toBe(true);
+    await client.close();
+  });
+
+  it("refuses non-loopback hosts and foreign browser origins", async () => {
+    const t = setup();
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+    const evil = await t.app.request("http://evil.example/mcp", { method: "POST", headers: { ...headers, host: "evil.example" }, body });
+    expect(evil.status).toBe(403);
+    const origin = await t.app.request("http://localhost:4000/mcp", { method: "POST", headers: { ...headers, host: "localhost:4000", origin: "https://evil.example" }, body });
+    expect(origin.status).toBe(403);
+  });
+});

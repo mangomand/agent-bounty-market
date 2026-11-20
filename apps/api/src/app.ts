@@ -473,7 +473,7 @@ export function createApp(opts: AppOptions) {
   const loopbackHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
   app.all("/mcp", async (c) => {
     // DNS-rebinding guard: only loopback Host headers, and browsers only from allowed origins.
-    const host = c.req.header("host") ?? "";
+    const host = c.req.header("host") ?? new URL(c.req.url).host;
     const origin = c.req.header("origin");
     const allowedOrigins = opts.corsOrigins ?? [];
     if (!loopbackHost.test(host) || (origin && !allowedOrigins.includes(origin)))
