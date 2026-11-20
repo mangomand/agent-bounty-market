@@ -7,3 +7,6 @@ dist/
 contracts/out/
 contracts/cache/
 .DS_Store
+contracts/lib/
+*.tsbuildinfo
+next-env.d.ts

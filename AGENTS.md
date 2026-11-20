@@ -121,15 +121,21 @@ The signing key lives only in the runner process, outside the container.
 - Commit `.env.example` with placeholder values.
 - Only use testnet keys. Never put a mainnet key anywhere in this repo.
 
-## Commands (fill in as they're created)
+## Commands
+
+pnpm is pinned through `packageManager`. If `pnpm` isn't on PATH, run `corepack enable` once or prefix commands with `corepack`.
 
 ```
 pnpm install
-pnpm dev                 # web + api
-pnpm test                # vitest
-cd contracts && forge build && forge test
+pnpm dev                 # api + web (web on :3000)
+pnpm test                # vitest across all packages
+pnpm typecheck           # tsc in every package
+pnpm --filter @abm/web build
+cd contracts && forge build && forge test   # see contracts/README.md for setup
 anvil                    # local chain fallback
 ```
+
+Workspace packages are named `@abm/<dir>` and import shared types from `@abm/shared`. Copy `.env.example` to `.env.local`.
 
 ## Working conventions
 
