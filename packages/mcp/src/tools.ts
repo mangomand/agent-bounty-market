@@ -188,16 +188,29 @@ export async function callTool(api: BountyApi, name: string, rawArgs: unknown): 
   }
 }
 
+/**
+ * Schema handed to the SDK. The SDK parses arguments with whatever schema it is given before calling the handler,
+ * and a plain zod object strips unknown keys there, so our strict check would never see them. Instead the SDK gets a
+ * loose object that accepts any arguments unchanged, with the strict schema's JSON Schema (including
+ * `additionalProperties: false`) attached as metadata so tools/list still advertises the exact shape.
+ * All validation happens in callTool against the strict schema.
+ */
+function sdkInputSchema(name: ToolName): z.ZodObject {
+  // The SDK emits draft-7; drop $schema so the SDK's own header is used.
+  const { $schema: _, ...jsonSchema } = z.toJSONSchema(toolInputs[name], { target: "draft-7", io: "input" });
+  return z.looseObject({}).meta(jsonSchema);
+}
+
 export function registerTools(server: McpServer, api: BountyApi): void {
   for (const name of TOOL_NAMES) {
     server.registerTool(
       name,
       {
         description: descriptions[name],
-        inputSchema: toolInputs[name].shape,
+        inputSchema: sdkInputSchema(name),
         annotations: { readOnlyHint: name.startsWith("get_") || name === "list_bounties" || name === "download_repository", openWorldHint: false },
       },
-      // The SDK validates against the shape; callTool re-validates with the strict schema (rejects unknown keys).
+      // Raw arguments reach callTool, which validates with the strict schema and rejects unknown keys by name.
       (args: unknown) => callTool(api, name, args),
     );
   }
