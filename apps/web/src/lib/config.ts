@@ -5,6 +5,8 @@ export const config = {
   apiUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000",
   rpcUrl: process.env.NEXT_PUBLIC_RPC_URL || "http://127.0.0.1:8545",
   mock: process.env.NEXT_PUBLIC_MOCK === "1",
+  /** Local Anvil only: connect as Anvil's unlocked account #0. Anvil signs; the page holds no key. */
+  devWallet: process.env.NEXT_PUBLIC_DEV_WALLET === "1",
   bountyContract: (process.env.NEXT_PUBLIC_BOUNTY_CONTRACT_ADDRESS || undefined) as Hex | undefined,
   usdc: (process.env.NEXT_PUBLIC_USDC_ADDRESS || undefined) as Hex | undefined,
   explorerUrl: process.env.NEXT_PUBLIC_EXPLORER_URL || undefined,
