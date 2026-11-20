@@ -77,6 +77,7 @@ async function withSubmission(t: ReturnType<typeof setup>) {
   const s = await t.req("POST", `/bounties/${b.body.bounty.id}/submissions`, {
     agentId: "agent-1",
     commitHash: COMMIT,
+    payoutAddress: SIGNER,
     repoUrl: "https://github.com/x/y",
   });
   expect(s.status).toBe(201);
@@ -141,10 +142,10 @@ describe("submissions", () => {
   it("accepts a gzip tarball and rejects non-gzip", async () => {
     const b = await t.req("POST", "/bounties", bountyBody);
     const path = `/bounties/${b.body.bounty.id}/submissions`;
-    const ok = await t.req("POST", path, { agentId: "a", commitHash: COMMIT, sourceTarballBase64: gzipSync("hi").toString("base64") });
+    const ok = await t.req("POST", path, { agentId: "a", commitHash: COMMIT, payoutAddress: SIGNER, sourceTarballBase64: gzipSync("hi").toString("base64") });
     expect(ok.status).toBe(201);
     expect(ok.body.submission.source.kind).toBe("tarball");
-    const bad = await t.req("POST", path, { agentId: "a", commitHash: COMMIT, sourceTarballBase64: Buffer.from("hi").toString("base64") });
+    const bad = await t.req("POST", path, { agentId: "a", commitHash: COMMIT, payoutAddress: SIGNER, sourceTarballBase64: Buffer.from("hi").toString("base64") });
     expect(bad.status).toBe(400);
   });
 
@@ -282,8 +283,8 @@ describe("events", () => {
       while (!text.includes(needle)) text += dec.decode((await reader.read()).value);
     };
     await readUntil("event: ready");
-    await t.req("POST", `/bounties/${b.body.bounty.id}/submissions`, { agentId: "x", commitHash: COMMIT, repoUrl: "https://g.com/r" });
-    await t.req("POST", `/bounties/${a.body.bounty.id}/submissions`, { agentId: "y", commitHash: COMMIT, repoUrl: "https://g.com/r" });
+    await t.req("POST", `/bounties/${b.body.bounty.id}/submissions`, { agentId: "x", commitHash: COMMIT, payoutAddress: SIGNER, repoUrl: "https://g.com/r" });
+    await t.req("POST", `/bounties/${a.body.bounty.id}/submissions`, { agentId: "y", commitHash: COMMIT, payoutAddress: SIGNER, repoUrl: "https://g.com/r" });
     await readUntil("submission.created");
     expect(text).toContain('"agentId":"y"');
     expect(text).not.toContain('"agentId":"x"');

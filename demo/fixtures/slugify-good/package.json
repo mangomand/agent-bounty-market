@@ -1,0 +1,9 @@
+{
+  "name": "slugify-solution",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/slugify.js",
+    "test": "node --test"
+  }
+}

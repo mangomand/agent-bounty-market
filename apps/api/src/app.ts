@@ -4,11 +4,15 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createServer as createMcpServer, httpApi } from "@abm/mcp";
 import {
   MAX_TARBALL_BYTES,
   acceptSubmissionSchema,
   createBountySchema,
   createSubmissionSchema,
+  fundBountySchema,
+  type Hex,
   idSchema,
   postReceiptsSchema,
   requestRunSchema,
@@ -22,6 +26,7 @@ import {
   type SignedReceipt,
   type WorkflowState,
 } from "@abm/shared";
+import { ChainError, type ChainClient } from "./chain";
 import { type Db, newId, now as defaultNow, toBounty, toReceipt, toRun, toSubmission } from "./db";
 
 export interface AppOptions {
@@ -31,12 +36,19 @@ export interface AppOptions {
   runnerSigners?: string[];
   /** Origins allowed by CORS (the creator web page). */
   corsOrigins?: string[];
+  /**
+   * Onchain side: verifies funding and payout txs, registers submissions, relays receipts.
+   * When unset the API runs offchain only (unit tests).
+   */
+  chain?: ChainClient;
+  /** Start the test run on submit and the security run once tests verify. */
+  autoRun?: boolean;
   now?: () => number;
 }
 
 export class HttpError extends Error {
   constructor(
-    readonly status: 400 | 403 | 404 | 409 | 413 | 422,
+    readonly status: 400 | 403 | 404 | 409 | 413 | 422 | 502,
     readonly code: string,
     message: string,
     readonly details?: unknown,
@@ -70,7 +82,7 @@ async function jsonBody(c: Context): Promise<unknown> {
 }
 
 export function createApp(opts: AppOptions) {
-  const { db, runner } = opts;
+  const { db, runner, chain } = opts;
   const now = opts.now ?? defaultNow;
   const signers = new Set((opts.runnerSigners ?? []).map((s) => s.toLowerCase()));
   const events = new EventEmitter();
@@ -116,14 +128,37 @@ export function createApp(opts: AppOptions) {
     }
   };
 
-  /** Validate and store receipts for one submission, advancing its workflow state. All-or-nothing. */
-  const ingestReceipts = (submissionId: string, receipts: SignedReceipt[]) => {
+  /** Sets the submission's state to what the contract says. The contract is the source of truth. */
+  const syncFromChain = async (submissionId: string) => {
+    const sub = mustSubmission(submissionId);
+    if (!chain || !sub.onchainId) return sub;
+    const state = await chain.submissionState(sub.onchainId);
+    if (state !== sub.state) db.prepare("UPDATE submissions SET state = ?, updated_at = ? WHERE id = ?").run(state, now(), sub.id);
+    return mustSubmission(submissionId);
+  };
+
+  const chainCall = async <T>(fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof ChainError) throw new HttpError(e.reason ? 409 : 422, "onchain_rejected", e.message);
+      throw new HttpError(502, "chain_unavailable", `chain request failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  /**
+   * Validate and store receipts for one submission, then relay the passing ones to the contract,
+   * which re-verifies the signature, signer role, commit, expiry, replay, and step order.
+   * Offchain storage is all-or-nothing; the final state always mirrors the contract.
+   */
+  const ingestReceipts = async (submissionId: string, receipts: SignedReceipt[]) => {
     const stored = tx(() => {
       const out = [];
       for (const r of receipts) {
         const sub = mustSubmission(submissionId);
         const bounty = mustBounty(sub.bountyId);
-        if (r.submissionId !== sub.id) throw new HttpError(422, "wrong_submission", "receipt is for a different submission");
+        if (r.submissionId !== sub.id && r.submissionId !== sub.onchainId)
+          throw new HttpError(422, "wrong_submission", "receipt is for a different submission");
         if (r.bountyId !== bounty.id && r.bountyId !== bounty.onchainId)
           throw new HttpError(422, "wrong_bounty", "receipt is for a different bounty");
         if (r.commitHash !== sub.commitHash) throw new HttpError(422, "wrong_commit", "receipt commit does not match submission");
@@ -141,23 +176,43 @@ export function createApp(opts: AppOptions) {
         const id = newId("rcpt");
         db.prepare(
           `INSERT INTO receipts (id, submission_id, bounty_id, commit_hash, receipt_type, runner_version, result,
-             timestamp, expiry, signature, signer, logs_hash, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             timestamp, expiry, signature, signer, logs_hash, digest, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         ).run(id, sub.id, r.bountyId, r.commitHash, r.receiptType, r.runnerVersion, r.result ? 1 : 0, r.timestamp, r.expiry,
-          r.signature, r.signer, r.logsHash ?? null, now());
+          r.signature, r.signer, r.logsHash ?? null, chain?.receiptDigest(r) ?? null, now());
         db.prepare(`UPDATE submissions SET state = ?, ${check}_status = ?, updated_at = ? WHERE id = ?`).run(
           r.result ? advancesTo : sub.state,
           r.result ? "passed" : "failed",
           now(),
           sub.id,
         );
-        out.push(toReceipt(db.prepare("SELECT * FROM receipts WHERE id = ?").get(id)!));
+        out.push(id);
       }
       return out;
     });
+
+    let relayError: HttpError | undefined;
+    if (chain && mustSubmission(submissionId).onchainId) {
+      for (const [i, r] of receipts.entries()) {
+        if (!r.result) continue; // the contract only accepts passing receipts
+        try {
+          const { txHash } = await chainCall(() => chain.relayReceipt(r));
+          db.prepare("UPDATE receipts SET tx_hash = ? WHERE id = ?").run(txHash, stored[i]!);
+        } catch (e) {
+          relayError = e instanceof HttpError ? e : new HttpError(502, "chain_unavailable", String(e));
+          const check = RECEIPT_STEPS[r.receiptType as keyof typeof RECEIPT_STEPS][2];
+          db.prepare(`UPDATE submissions SET ${check}_status = 'error', updated_at = ? WHERE id = ?`).run(now(), submissionId);
+          break;
+        }
+      }
+      await syncFromChain(submissionId).catch(() => undefined);
+    }
+
     const sub = mustSubmission(submissionId);
-    for (const receipt of stored) emit({ type: "receipt.created", bountyId: sub.bountyId, receipt });
+    const out = stored.map((id) => toReceipt(db.prepare("SELECT * FROM receipts WHERE id = ?").get(id)!));
+    for (const receipt of out) emit({ type: "receipt.created", bountyId: sub.bountyId, receipt });
     emit({ type: "submission.updated", bountyId: sub.bountyId, submission: sub });
-    return stored;
+    if (relayError) throw relayError;
+    return out;
   };
 
   const setChecks = (sub: ApiSubmission, kind: RunKind, status: "running" | "error") => {
@@ -205,7 +260,8 @@ export function createApp(opts: AppOptions) {
       let error: string | null = null;
       try {
         const result = await runner.run(job);
-        if (result.receipts.length > 0) ingestReceipts(sub.id, result.receipts);
+        if (result.logs) db.prepare("UPDATE runs SET logs = ? WHERE id = ?").run(result.logs, runId);
+        if (result.receipts.length > 0) await ingestReceipts(sub.id, result.receipts);
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
         setChecks(sub, kind, "error");
@@ -213,6 +269,14 @@ export function createApp(opts: AppOptions) {
       db.prepare("UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE id = ?").run(
         error ? "error" : "finished", error, now(), runId);
       emit({ type: "run.finished", bountyId: sub.bountyId, run: toRun(db.prepare("SELECT * FROM runs WHERE id = ?").get(runId)!) });
+      const after = mustSubmission(sub.id);
+      if (opts.autoRun && !error && kind === "test" && after.state === "TESTS_VERIFIED") {
+        try {
+          startRun(after, "security");
+        } catch (e) {
+          console.error(`auto security run for ${sub.id} not started: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     })();
     pendingRuns.add(p);
     void p.finally(() => pendingRuns.delete(p));
@@ -247,9 +311,22 @@ export function createApp(opts: AppOptions) {
     return c.json({ bounties: rows.map((r) => mustBounty(String(r.id))) });
   });
 
+  /** Confirms the creator's createBounty tx matches this bounty; returns the contract's bounty id. */
+  const verifyFunding = async (b: Pick<ApiBounty, "creator" | "specHash" | "testSuiteHash" | "amountUsdc" | "deadline">, txHash: Hex) => {
+    if (!chain) throw new HttpError(409, "no_chain", "no chain configured");
+    return (await chainCall(() => chain.verifyFunding(txHash, b))).onchainId;
+  };
+
   app.post("/bounties", async (c) => {
     const b = parse(createBountySchema, await jsonBody(c));
     if (b.deadline <= now()) throw new HttpError(400, "invalid_request", "deadline must be in the future");
+    if (chain && (b.onchainId || b.fundTxHash)) {
+      // Never trust a client-supplied onchain id: derive it from the funding tx.
+      if (!b.fundTxHash) throw new HttpError(400, "invalid_request", "onchainId requires fundTxHash");
+      const onchainId = await verifyFunding(b, b.fundTxHash);
+      if (b.onchainId && b.onchainId !== onchainId) throw new HttpError(422, "onchain_mismatch", "onchainId does not match the funding tx");
+      b.onchainId = onchainId;
+    }
     const id = newId("bty");
     try {
       db.prepare(
@@ -268,6 +345,23 @@ export function createApp(opts: AppOptions) {
   });
 
   app.get("/bounties/:id", (c) => c.json({ bounty: mustBounty(bountyId(c)) }));
+
+  /** Records the creator's onchain funding. The API reads the BountyCreated event itself. */
+  app.post("/bounties/:id/fund", async (c) => {
+    const b = mustBounty(bountyId(c));
+    const { txHash } = parse(fundBountySchema, await jsonBody(c));
+    if (b.onchainId) throw new HttpError(409, "already_funded", `bounty is already funded onchain as #${b.onchainId}`);
+    const onchainId = await verifyFunding(b, txHash);
+    try {
+      db.prepare("UPDATE bounties SET onchain_id = ?, fund_tx_hash = ? WHERE id = ?").run(onchainId, txHash, b.id);
+    } catch (e) {
+      if (String(e).includes("UNIQUE")) throw new HttpError(409, "duplicate", "that onchain bounty is already linked");
+      throw e;
+    }
+    const bounty = mustBounty(b.id);
+    emit({ type: "bounty.updated", bountyId: b.id, bounty });
+    return c.json({ bounty });
+  });
 
   app.get("/bounties/:id/repository", (c) => {
     const b = mustBounty(bountyId(c));
@@ -291,15 +385,24 @@ export function createApp(opts: AppOptions) {
       if (tarball.byteLength > MAX_TARBALL_BYTES) throw new HttpError(413, "too_large", "tarball exceeds 10 MB");
       if (tarball[0] !== 0x1f || tarball[1] !== 0x8b) throw new HttpError(400, "invalid_request", "tarball must be gzip (.tar.gz)");
     }
+    let onchain: { onchainId: string; txHash: Hex } | null = null;
+    if (chain) {
+      if (!b.onchainId) throw new HttpError(409, "not_funded", "bounty is not funded onchain yet");
+      // Locks the commit and payout address onchain before any run.
+      onchain = await chainCall(() => chain.registerSubmission(b.onchainId!, s.commitHash, s.payoutAddress));
+    }
     const id = newId("sub");
     const t = now();
     db.prepare(
-      `INSERT INTO submissions (id, bounty_id, agent_id, commit_hash, state, repo_url, tarball, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-    ).run(id, b.id, s.agentId, s.commitHash, "CODE_SUBMITTED", s.repoUrl ?? null, tarball, t, t);
+      `INSERT INTO submissions (id, bounty_id, agent_id, commit_hash, payout_address, onchain_id, submit_tx_hash, state,
+         repo_url, tarball, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, b.id, s.agentId, s.commitHash, s.payoutAddress.toLowerCase(), onchain?.onchainId ?? null, onchain?.txHash ?? null,
+      "CODE_SUBMITTED", s.repoUrl ?? null, tarball, t, t);
     const submission = mustSubmission(id);
     emit({ type: "submission.created", bountyId: b.id, submission });
-    return c.json({ submission }, 201);
+    if (opts.autoRun) startRun(submission, "test");
+    return c.json({ submission: mustSubmission(id) }, 201);
   });
 
   app.get("/submissions/:id", (c) => {
@@ -316,7 +419,7 @@ export function createApp(opts: AppOptions) {
   app.post("/submissions/:id/receipts", async (c) => {
     const s = mustSubmission(submissionId(c));
     const { receipts } = parse(postReceiptsSchema, await jsonBody(c));
-    return c.json({ receipts: ingestReceipts(s.id, receipts) }, 201);
+    return c.json({ receipts: await ingestReceipts(s.id, receipts) }, 201);
   });
 
   app.get("/submissions/:id/runs", (c) => c.json({ runs: listRuns(mustSubmission(submissionId(c)).id) }));
@@ -330,13 +433,25 @@ export function createApp(opts: AppOptions) {
   app.post("/submissions/:id/accept", async (c) => {
     const id = submissionId(c);
     const body = parse(acceptSubmissionSchema, await jsonBody(c));
+    if (chain) {
+      // The creator's wallet already sent acceptSubmission; check the tx really paid this submission.
+      const pre = mustSubmission(id);
+      const b = mustBounty(pre.bountyId);
+      if (!pre.onchainId) throw new HttpError(409, "out_of_order", "submission is not registered onchain");
+      const paid = await chainCall(() => chain.verifyPayout(body.txHash, pre.onchainId!));
+      if (paid.from.toLowerCase() !== b.creator.toLowerCase() || body.creator.toLowerCase() !== b.creator.toLowerCase())
+        throw new HttpError(403, "not_creator", "payout tx was not sent by the bounty creator");
+      if (paid.to.toLowerCase() !== pre.payoutAddress.toLowerCase())
+        throw new HttpError(422, "onchain_mismatch", "payout went to a different address");
+    }
     const sub = tx(() => {
       const s = mustSubmission(id);
       const b = mustBounty(s.bountyId);
       if (b.creator.toLowerCase() !== body.creator.toLowerCase())
         throw new HttpError(403, "not_creator", "only the bounty creator can accept");
       if (b.state !== "OPEN") throw new HttpError(409, "bounty_closed", `bounty is ${b.state}`);
-      if (s.state !== "SECURITY_REVIEWED")
+      // With a chain, the verified payout tx is the proof; the row may already mirror PAYOUT.
+      if (s.state !== "SECURITY_REVIEWED" && !(chain && s.state === "PAYOUT"))
         throw new HttpError(409, "out_of_order", `accept requires state SECURITY_REVIEWED, submission is ${s.state}`);
       const t = now();
       // The contract accepts and pays out in one transaction, so the accept tx is the payout tx.
@@ -349,6 +464,24 @@ export function createApp(opts: AppOptions) {
     emit({ type: "submission.updated", bountyId: bounty.id, submission: sub });
     emit({ type: "bounty.updated", bountyId: bounty.id, bounty });
     return c.json({ submission: sub, bounty });
+  });
+
+  // ---------- MCP over Streamable HTTP ----------
+  // Same tools as the stdio server (packages/mcp). Tools call this app in-process through its
+  // public routes, so they get exactly the same validation. Stateless: one server per request.
+  const mcpApi = httpApi("http://api.internal", (input, init) => Promise.resolve(app.fetch(new Request(input, init))));
+  const loopbackHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+  app.all("/mcp", async (c) => {
+    // DNS-rebinding guard: only loopback Host headers, and browsers only from allowed origins.
+    const host = c.req.header("host") ?? "";
+    const origin = c.req.header("origin");
+    const allowedOrigins = opts.corsOrigins ?? [];
+    if (!loopbackHost.test(host) || (origin && !allowedOrigins.includes(origin)))
+      throw new HttpError(403, "forbidden_host", "MCP is only served to local clients");
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    const server = createMcpServer(mcpApi);
+    await server.connect(transport);
+    return transport.handleRequest(c.req.raw);
   });
 
   app.get("/events", (c) => {

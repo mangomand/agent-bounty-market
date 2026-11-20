@@ -7,12 +7,19 @@
     "dev": "tsx watch --env-file-if-exists=../../.env.local src/index.ts",
     "start": "tsx --env-file-if-exists=../../.env.local src/index.ts",
     "seed": "tsx --env-file-if-exists=../../.env.local src/seed-cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:onchain": "tsx --env-file-if-exists=../../.env.local src/seed-onchain.ts"
   },
   "dependencies": {
     "@abm/shared": "workspace:*",
     "@hono/node-server": "^2.1.9",
     "hono": "^4.13.19",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "viem": "^2.58.2",
+    "@abm/mcp": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "devDependencies": {
+    "@abm/runner": "workspace:*"
   }
 }
