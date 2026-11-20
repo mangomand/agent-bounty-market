@@ -15,7 +15,7 @@ export const DEMO = [
   {
     id: "bty_demo2",
     title: "Rate limiter middleware",
-    spec: "Implement a token-bucket rate limiter in src/rateLimit.ts: rateLimit({ capacity, refillPerSec }) returns (key: string) => boolean. Must be deterministic under a fake clock. Tests in test/rateLimit.test.ts.",
+    spec: "Implement a token-bucket rate limiter in src/rateLimit.ts: rateLimit({ capacity, refillPerSec }) returns (key: string) => boolean. Must be deterministic under a fake clock. Tests in test/rateLimit.test.ts. No dependencies and no network: the sandbox runs Node 22, so run TypeScript with `node --experimental-strip-types --test`.",
     amountUsdc: "120",
     testCommand: "npm test",
   },
