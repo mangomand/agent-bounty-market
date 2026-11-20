@@ -217,9 +217,10 @@ export function createApp(opts: AppOptions) {
 
   const setChecks = (sub: ApiSubmission, kind: RunKind, status: "running" | "error") => {
     const cols = kind === "test" ? ["build", "test"] : ["security"];
+    // Only touch checks without a result yet; a retry also restarts checks the runner errored on.
+    const from = status === "running" ? "('pending','running','error')" : "('pending','running')";
     for (const col of cols) {
-      // Only touch checks that have not produced a result yet.
-      db.prepare(`UPDATE submissions SET ${col}_status = ?, updated_at = ? WHERE id = ? AND ${col}_status IN ('pending','running')`)
+      db.prepare(`UPDATE submissions SET ${col}_status = ?, updated_at = ? WHERE id = ? AND ${col}_status IN ${from}`)
         .run(status, now(), sub.id);
     }
     emit({ type: "submission.updated", bountyId: sub.bountyId, submission: mustSubmission(sub.id) });
@@ -232,7 +233,8 @@ export function createApp(opts: AppOptions) {
       throw new HttpError(409, "out_of_order", `${kind} run requires state ${RUN_REQUIRES[kind]}, submission is ${sub.state}`);
     if (db.prepare("SELECT 1 FROM runs WHERE submission_id = ? AND kind = ? AND status = 'running'").get(sub.id, kind))
       throw new HttpError(409, "run_in_progress", `a ${kind} run is already in progress`);
-    if (kind === "test" && sub.checks.build !== "pending")
+    // A runner error (not a failing test) can be retried on the same commit.
+    if (kind === "test" && !["pending", "error"].includes(sub.checks.build))
       throw new HttpError(409, "already_run", "this submission was already tested; submit a new commit");
 
     const runId = newId("run");

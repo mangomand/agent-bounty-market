@@ -218,6 +218,23 @@ describe("runs and receipts", () => {
     expect(sub.runs[0]).toMatchObject({ status: "error", error: "sandbox exploded" });
   });
 
+  it("retries a test run on the same commit after a runner error, but not after a result", async () => {
+    let fail = true;
+    const inner = fakeRunner();
+    const t = setup({ run: (job) => (fail ? Promise.reject(new Error("sandbox exploded")) : inner.run(job)) });
+    const ids = await withSubmission(t);
+    await t.req("POST", `/submissions/${ids.submissionId}/runs`, { kind: "test" });
+    await t.idle();
+    fail = false;
+    const retry = await t.req("POST", `/submissions/${ids.submissionId}/runs`, { kind: "test" });
+    expect(retry.status).toBe(202);
+    await t.idle();
+    const sub = (await t.req("GET", `/submissions/${ids.submissionId}`)).body.submission;
+    expect(sub).toMatchObject({ state: "TESTS_VERIFIED", checks: { build: "passed", test: "passed" } });
+    const again = await t.req("POST", `/submissions/${ids.submissionId}/runs`, { kind: "test" });
+    expect(again.body.error.code).toBe("out_of_order");
+  });
+
   it("records a failed build without advancing", async () => {
     const t = setup();
     const ids = await withSubmission(t);

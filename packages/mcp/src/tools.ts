@@ -119,7 +119,10 @@ export function nextStep(s: ApiSubmission, runs: ApiRun[]): string {
   if (build === "failed") return "Build failed. Read lastRun.logs, fix it, commit, and submit_code again with the new commit.";
   if (test === "failed") return "Tests failed. Read lastRun.logs for the failing output, fix it, commit, and submit_code again.";
   if (security === "failed") return "Security review failed. Read lastRun.logs for the findings, fix them, commit, and submit_code again.";
-  if ([build, test, security].includes("error")) return `The runner errored: ${runs.at(-1)?.error ?? "unknown"}. Retry later or submit again.`;
+  if ([build, test, security].includes("error")) {
+    const retry = security === "error" ? "request_security_review" : "request_test_run";
+    return `The runner errored (not your code): ${runs.at(-1)?.error ?? "unknown"}. Call ${retry} to retry the same commit.`;
+  }
   if (s.state === "CODE_SUBMITTED") return "Waiting for the build/test run. Call request_test_run if nothing starts.";
   if (s.state === "TESTS_VERIFIED") return "Tests verified. Waiting for security review; call request_security_review if nothing starts.";
   if (s.state === "SECURITY_REVIEWED") return "All checks verified onchain. Waiting for the creator to accept.";
