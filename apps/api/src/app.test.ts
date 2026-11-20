@@ -309,6 +309,19 @@ describe("events", () => {
     await reader.cancel();
   });
 
+  it("allows the web origin to open the stream", async () => {
+    const t = setup();
+    const ctrl = new AbortController();
+    const res = await t.app.request("/events?bountyId=bty_demo1", { headers: { origin: "http://localhost:3000" }, signal: ctrl.signal });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
+    const foreign = await t.app.request("/events", { headers: { origin: "https://evil.example" }, signal: ctrl.signal });
+    expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
+    ctrl.abort();
+    await res.body?.cancel();
+    await foreign.body?.cancel();
+  });
+
   it("rejects a malformed bountyId filter", async () => {
     const t = setup();
     expect((await t.req("GET", "/events?bountyId=..%2F")).status).toBe(400);
