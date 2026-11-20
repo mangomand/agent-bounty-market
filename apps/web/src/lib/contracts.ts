@@ -1,22 +1,14 @@
 /**
  * Contract calls made from the creator page. The page never holds funds or keys:
  * every call here is signed by the creator's wallet.
- *
- * TODO(contracts): the real ABI lands in `@abm/shared` from the contracts PR.
- * Replace BOUNTY_ABI below with that export and match the function names/args.
  */
 import type { Hex } from "@abm/shared";
-import { erc20Abi, keccak256, parseAbi, parseUnits, toHex } from "viem";
+import { bountyEscrowAbi, mockUsdcAbi } from "@abm/shared/abi";
+import { parseUnits } from "viem";
 import { waitForTransactionReceipt, writeContract } from "wagmi/actions";
 import { fakeHash } from "./api/mock";
 import { config } from "./config";
 import { wagmiConfig } from "./wagmi";
-
-// TODO(contracts): placeholder signatures; swap for the ABI exported by @abm/shared.
-const BOUNTY_ABI = parseAbi([
-  "function createBounty(bytes32 specHash, bytes32 testSuiteHash, uint256 amount, uint64 deadline) returns (uint256)",
-  "function acceptSubmission(uint256 bountyId, bytes32 submissionId)",
-]);
 
 const USDC_DECIMALS = 6;
 
@@ -26,12 +18,6 @@ export interface FundBountyArgs {
   amountUsdc: string;
   /** Unix seconds. */
   deadline: number;
-}
-
-export interface AcceptArgs {
-  /** Onchain bounty id. */
-  bountyId: string;
-  submissionId: string;
 }
 
 function addresses(): { bounty: Hex; usdc: Hex } {
@@ -46,42 +32,41 @@ function addresses(): { bounty: Hex; usdc: Hex } {
 const mockTx = (label: string) =>
   new Promise<Hex>((resolve) => setTimeout(() => resolve(fakeHash(`${label}:${Date.now()}`)), 700));
 
-/** Approves USDC and escrows it in the bounty contract. Returns the funding tx hash. */
+async function send(hash: Hex): Promise<Hex> {
+  const receipt = await waitForTransactionReceipt(wagmiConfig, { hash });
+  if (receipt.status !== "success") throw new Error(`Transaction ${hash} reverted`);
+  return hash;
+}
+
+/** Approves USDC and escrows it with `createBounty`. Returns the funding tx hash. */
 export async function fundBounty(args: FundBountyArgs): Promise<Hex> {
   if (config.mock) return mockTx("fund");
   const { bounty, usdc } = addresses();
   const amount = parseUnits(args.amountUsdc, USDC_DECIMALS);
 
-  const approveTx = await writeContract(wagmiConfig, {
-    address: usdc,
-    abi: erc20Abi,
-    functionName: "approve",
-    args: [bounty, amount],
-  });
-  await waitForTransactionReceipt(wagmiConfig, { hash: approveTx });
-
-  // TODO(contracts): confirm argument order and whether the API or the contract assigns the id.
-  const hash = await writeContract(wagmiConfig, {
-    address: bounty,
-    abi: BOUNTY_ABI,
-    functionName: "createBounty",
-    args: [args.specHash, args.testSuiteHash, amount, BigInt(args.deadline)],
-  });
-  await waitForTransactionReceipt(wagmiConfig, { hash });
-  return hash;
+  await send(
+    await writeContract(wagmiConfig, { address: usdc, abi: mockUsdcAbi, functionName: "approve", args: [bounty, amount] }),
+  );
+  return send(
+    await writeContract(wagmiConfig, {
+      address: bounty,
+      abi: bountyEscrowAbi,
+      functionName: "createBounty",
+      args: [args.specHash, args.testSuiteHash, amount, BigInt(args.deadline)],
+    }),
+  );
 }
 
-/** Records CREATOR_ACCEPTED; the contract then releases the payout. Returns the tx hash. */
-export async function acceptSubmission(args: AcceptArgs): Promise<Hex> {
+/** CREATOR_ACCEPTED → PAYOUT in one tx: the contract pays the submitter. Returns the tx hash. */
+export async function acceptSubmission(submissionOnchainId: string): Promise<Hex> {
   if (config.mock) return mockTx("accept");
   const { bounty } = addresses();
-  // TODO(contracts): submission ids are API strings today; the contract likely wants bytes32.
-  const hash = await writeContract(wagmiConfig, {
-    address: bounty,
-    abi: BOUNTY_ABI,
-    functionName: "acceptSubmission",
-    args: [BigInt(args.bountyId), keccak256(toHex(args.submissionId))],
-  });
-  await waitForTransactionReceipt(wagmiConfig, { hash });
-  return hash;
+  return send(
+    await writeContract(wagmiConfig, {
+      address: bounty,
+      abi: bountyEscrowAbi,
+      functionName: "acceptSubmission",
+      args: [BigInt(submissionOnchainId)],
+    }),
+  );
 }

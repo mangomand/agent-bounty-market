@@ -1,6 +1,6 @@
-import { chmod, cp, mkdtemp, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { chmod, cp, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { Hex, Receipt, ReceiptType } from "@abm/shared";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { testDigest, truncateLog } from "./digest.js";
@@ -34,6 +34,8 @@ export interface RunOptions {
   receiptTtlSec?: number;
   /** Max characters kept per log stream in the result. */
   maxLogChars?: number;
+  /** Where per-run snapshot copies go. Defaults to sandboxRoot(). */
+  sandboxDir?: string;
   now?: () => number;
 }
 
@@ -93,11 +95,22 @@ function toStep(res: ExecResult, maxLogChars: number): StepResult {
   };
 }
 
-/** Copies the snapshot to a private temp dir the sandbox user can read. */
-async function stageSnapshot(snapshotPath: string): Promise<string> {
+/**
+ * Root for per-run snapshot copies. It must be a path the Docker daemon can bind-mount:
+ * Colima and Docker Desktop share only the home directory by default, so os.tmpdir()
+ * (/var/folders/... on macOS) does not work. Override with ABM_SANDBOX_DIR.
+ */
+export function sandboxRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const dir = env.ABM_SANDBOX_DIR?.trim();
+  return dir ? resolve(dir) : join(homedir(), ".abm", "sandbox");
+}
+
+/** Copies the snapshot to a private per-run dir the sandbox user can read. */
+async function stageSnapshot(snapshotPath: string, root: string): Promise<string> {
   const s = await stat(snapshotPath);
   if (!s.isDirectory()) throw new Error("snapshotPath is not a directory");
-  const dir = await mkdtemp(join(tmpdir(), "abm-snapshot-"));
+  await mkdir(root, { recursive: true });
+  const dir = await mkdtemp(join(root, "snapshot-"));
   await cp(snapshotPath, dir, { recursive: true, verbatimSymlinks: true });
   await makeReadable(dir);
   return dir;
@@ -125,7 +138,7 @@ export async function runSubmission(input: SubmissionInput, opts: RunOptions): P
   const maxLogChars = opts.maxLogChars ?? DEFAULT_MAX_LOG_CHARS;
   const now = opts.now ?? Date.now;
 
-  const snapshotDir = await stageSnapshot(input.snapshotPath);
+  const snapshotDir = await stageSnapshot(input.snapshotPath, opts.sandboxDir ?? sandboxRoot());
   let build: StepResult = SKIPPED;
   let test: StepResult = SKIPPED;
   let digest: Hex | null = null;

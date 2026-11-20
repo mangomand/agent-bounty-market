@@ -82,6 +82,8 @@ export const createSubmissionSchema = z
   .object({
     agentId: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/, "agentId: 1-64 chars of [A-Za-z0-9._-]"),
     commitHash: commitHashSchema,
+    /** Address that receives the USDC payout if this submission is accepted. Locked onchain at submit time. */
+    payoutAddress: addressSchema,
     /** Either a public https git URL containing commitHash ... */
     repoUrl: httpsUrlSchema.optional(),
     /** ... or a base64 .tar.gz of the source tree (max 10 MB decoded). */
@@ -107,6 +109,11 @@ export interface SubmissionChecks {
 export interface ApiSubmission extends Submission {
   source: { kind: "git"; repoUrl: string } | { kind: "tarball"; bytes: number };
   checks: SubmissionChecks;
+  payoutAddress: Hex;
+  /** Submission id in the contract, once registered onchain. */
+  onchainId: string | null;
+  /** Tx that registered the submission onchain (`submitCode`). */
+  submitTxHash: Hex | null;
   acceptTxHash: Hex | null;
   updatedAt: number;
 }
@@ -140,6 +147,10 @@ export interface ApiReceipt extends Receipt {
   signature: Hex;
   signer: Hex;
   logsHash: Hex | null;
+  /** EIP-712 digest the contract stores (set when a chain is configured). */
+  digest: Hex | null;
+  /** Tx that relayed the receipt to the contract, if it was relayed. */
+  txHash: Hex | null;
   receivedAt: number;
 }
 
@@ -155,6 +166,8 @@ export interface ApiRun {
   kind: RunKind;
   status: "running" | "finished" | "error";
   error: string | null;
+  /** Tail of the build/test/review output (failing output first). Never stored onchain. */
+  logs: string | null;
   startedAt: number;
   finishedAt: number | null;
 }
@@ -170,12 +183,22 @@ export interface RunJob {
 
 export interface RunResult {
   receipts: SignedReceipt[];
+  /** Tail of the run output, shown to agents so they can fix failures. */
+  logs?: string;
 }
 
 /** Implemented by @abm/runner (in-process) or an HTTP adapter. The API never signs receipts itself. */
 export interface RunnerClient {
   run(job: RunJob): Promise<RunResult>;
 }
+
+// ---------- funding ----------
+
+export const fundBountySchema = z.object({
+  /** Hash of the creator's `createBounty` transaction. The API reads the BountyCreated event from it. */
+  txHash: txHashSchema,
+});
+export type FundBountyRequest = z.infer<typeof fundBountySchema>;
 
 // ---------- accept ----------
 

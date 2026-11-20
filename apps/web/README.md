@@ -10,6 +10,8 @@ Creator page: post and fund a bounty, watch submissions, accept one and get the 
 
 ## Run
 
+The full flow (Anvil, contracts, API, runner) comes up with `corepack pnpm demo` from the repo root. For UI work alone:
+
 ```sh
 cp apps/web/.env.example apps/web/.env.local
 NEXT_PUBLIC_MOCK=1 corepack pnpm --filter @abm/web dev   # no API, chain, or wallet needed
@@ -21,6 +23,7 @@ talks to `NEXT_PUBLIC_API_URL` and MetaMask on Anvil (chain 31337, `NEXT_PUBLIC_
 ## Layout
 
 - `src/lib/api/` — API client (`http.ts`), mock (`mock.ts`), shared response types
-- `src/lib/contracts.ts` — the only place that sends transactions. Placeholder ABI until the contract
-  ABI lands in `@abm/shared` (see `TODO(contracts)`).
+- `src/lib/contracts.ts` — the only place that sends transactions, using the ABI from `@abm/shared/abi`:
+  `approve` + `createBounty` to fund (then `POST /bounties/:id/fund` so the API can verify the event), and
+  `acceptSubmission(onchainSubmissionId)` to accept and pay.
 - `src/lib/workflow.ts` — maps `WorkflowState` to per-check status

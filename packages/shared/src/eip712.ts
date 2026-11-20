@@ -1,4 +1,4 @@
-import type { Hex } from "./index";
+import type { Hex, Receipt } from "./index";
 
 /**
  * EIP-712 schema for evidence receipts verified by BountyEscrow.sol.
@@ -93,4 +93,31 @@ export function commitHashToBytes32(commit: string): Hex {
     throw new Error(`invalid commit id: ${commit}`);
   }
   return `0x${hex.padStart(64, "0")}`;
+}
+
+const RECEIPT_TYPE_IDS: Partial<Record<Receipt["receiptType"], ReceiptTypeId>> = {
+  BuildReceipt: RECEIPT_TYPE.Build,
+  TestReceipt: RECEIPT_TYPE.Test,
+  SecurityReviewReceipt: RECEIPT_TYPE.SecurityReview,
+};
+
+function toUint(value: string, field: string): bigint {
+  if (!/^[0-9]{1,78}$/.test(value)) throw new Error(`${field} must be an onchain uint256 id, got ${value}`);
+  return BigInt(value);
+}
+
+/** Converts an off-chain receipt (string ids, git commit) into the struct `BountyEscrow` verifies. */
+export function toReceiptMessage(receipt: Receipt): ReceiptMessage {
+  const receiptType = RECEIPT_TYPE_IDS[receipt.receiptType];
+  if (receiptType === undefined) throw new Error(`receipt type ${receipt.receiptType} is not signed by the runner`);
+  return {
+    bountyId: toUint(receipt.bountyId, "bountyId"),
+    submissionId: toUint(receipt.submissionId, "submissionId"),
+    commitHash: commitHashToBytes32(receipt.commitHash),
+    receiptType,
+    runnerVersion: receipt.runnerVersion,
+    result: receipt.result,
+    timestamp: BigInt(receipt.timestamp),
+    expiry: BigInt(receipt.expiry),
+  };
 }

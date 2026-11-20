@@ -30,24 +30,25 @@ There are two user-facing surfaces, each for a different audience:
   - Accept a submission and see the payout transaction link
 
   Three screens at most. No marketing pages, dashboards-for-the-sake-of-it, or extra features.
-- **Developer CLI** (`apps/cli`): for devs running agents. This is the showpiece and should look polished in a terminal:
-  - Browse bounties
-  - Start or attach an agent
-  - Watch submissions move through the workflow live
-  - View receipts and payout status
+- **Developers: Claude Code (or any MCP client)** connected to our MCP server. There is no custom developer UI. A dev runs
+  `claude mcp add --transport http bounty http://localhost:4000/mcp` (or uses the committed `.mcp.json`) and their own
+  agent does the work:
+  - Browse bounties and read the locked spec (`list_bounties`, `get_bounty_spec`)
+  - Submit a commit with a `payoutAddress` (`submit_code`)
+  - Iterate on `get_submission_status`, which returns the workflow state, failing test output, next step, and receipt digests
 
-  Commands look like `bounty list`, `bounty run <id>`, `bounty watch <id>`, and `bounty receipts <id>`.
+  Tool output is the developer UX: keep it rich enough that an agent can fix a failure without any other tool.
 
-Both talk to the same local API. Neither holds bounty funds or a key that can move them.
+The web page and the MCP server both talk to the same local API (MCP is served by the API at `/mcp`; `packages/mcp`
+also runs over stdio). Neither holds bounty funds or a key that can move them.
 
 ## Stack
 
 | Layer | Tech |
 |---|---|
 | Creator web page | Next.js (App Router), TypeScript, Tailwind, shadcn/ui |
-| Developer CLI | TypeScript, Ink (React for terminals), commander |
-| Agent interface | MCP TypeScript SDK |
-| Agent runtime | TypeScript + an LLM SDK |
+| Developer interface | Claude Code / any MCP client → MCP TypeScript SDK (Streamable HTTP at `/mcp`, or stdio) |
+| Security reviewer | TypeScript in `packages/agents`, loaded by the runner via `SECURITY_REVIEWER_MODULE` |
 | Contracts | Solidity, Foundry, OpenZeppelin |
 | Chain access | viem |
 | Network | Arc testnet (or any EVM testnet); local Anvil as fallback |
@@ -58,17 +59,18 @@ Both talk to the same local API. Neither holds bounty funds or a key that can mo
 
 Use TypeScript everywhere except contracts. Share types between the MCP server, the API, and the frontend instead of duplicating them.
 
-## Planned layout
+## Layout
 
 ```
 apps/web/          Minimal creator page (post, fund, accept)
-apps/cli/          Developer CLI (Ink TUI)
-apps/api/          Local API shared by web, CLI, and MCP server
-packages/mcp/      MCP server (bounty discovery + submission tools)
-packages/runner/   Docker sandbox runner + receipt signing
-packages/agents/   Demo coding agents (fast/careless, test-focused, security-focused)
-packages/shared/   Shared types, EIP-712 schemas, contract ABIs
+apps/api/          Local API: index, chain relayer, SSE, and MCP over HTTP at /mcp
+packages/mcp/      MCP tools (served by the API; stdio entry for other clients)
+packages/runner/   Sandbox runner process: Docker (default) or process fallback, signs receipts
+packages/agents/   Security reviewer, scripted demo/adversarial clients, Claude Code setup assets
+packages/shared/   Shared types, EIP-712 schemas, contract ABIs (`@abm/shared/abi`)
 contracts/         Foundry project (src/, test/, script/)
+demo/              Fixture submissions used by `pnpm demo` and the end-to-end test
+scripts/demo.mjs   One-command local demo
 ```
 
 Keep this layout unless the team agrees to change it. If you add a package, update this file.
@@ -115,6 +117,14 @@ Submitted code is hostile. The runner must use:
 
 The signing key lives only in the runner process, outside the container.
 
+The runner picks its backend from `RUNNER_BACKEND`: `docker` (default; fails if `docker info` fails) or `process`.
+`process` runs submissions as **unsandboxed host processes** and is for local demos only; it prints a loud warning.
+`pnpm demo` uses Docker whenever `docker info` works. Snapshots are staged under `ABM_SANDBOX_DIR`
+(default `~/.abm/sandbox`), because Colima and Docker Desktop only share the home directory with the VM.
+
+The API relays receipts onchain with `RELAYER_PRIVATE_KEY`. That key holds no contract role and can only call the
+permissionless `submitCode` / `submitReceipt`; payout requires the creator's own wallet.
+
 ## Secrets
 
 - Keep private keys and API keys in `.env.local`. It is gitignored. Never commit it.
@@ -127,13 +137,17 @@ pnpm is pinned through `packageManager`. If `pnpm` isn't on PATH, run `corepack 
 
 ```
 pnpm install
-pnpm dev                 # api + web (web on :3000)
-pnpm test                # vitest across all packages
+pnpm demo                # Anvil + deploy + seed + runner + API (:4000, MCP at /mcp) + web (:3000)
+pnpm dev                 # api + web only (bring your own chain/runner env)
+pnpm test                # vitest across all packages (e2e runs when anvil + forge are on PATH)
 pnpm typecheck           # tsc in every package
 pnpm --filter @abm/web build
+pnpm --filter @abm/runner start   # runner process (needs .env.local)
 cd contracts && forge build && forge test   # see contracts/README.md for setup
-anvil                    # local chain fallback
 ```
+
+`pnpm demo` writes `.env.local` (gitignored) with Anvil's public dev keys and the deployed addresses. Foundry is
+expected in `~/.foundry/bin`.
 
 Workspace packages are named `@abm/<dir>` and import shared types from `@abm/shared`. Copy `.env.example` to `.env.local`.
 
@@ -143,8 +157,8 @@ Workspace packages are named `@abm/<dir>` and import shared types from `@abm/sha
 - Use strict TypeScript. No `any` without a comment explaining why.
 - Make small, focused commits with imperative messages.
 - Run `forge test` and `pnpm test` before you say a change is done.
-- For web changes, screenshot the page and check it before you hand it back. For CLI changes, run the command and check the terminal output, including at a narrow width.
-- CLI style: use color with meaning (green = verified, red = rejected, yellow = pending). Show spinners for live steps and a clear workflow progress line. It must still be readable with `NO_COLOR` set.
+- For web changes, screenshot the page and check it before you hand it back. For MCP changes, call the tools from a real MCP client (Claude Code or the SDK client) against `pnpm demo` and read the output.
+- MCP tool output: plain JSON an agent can act on. Always include the workflow state, a one-line `nextStep`, and the failing output from the last run. Never return secrets or anything that could move funds.
 - Write UI copy that is short and specific. No marketing filler.
 - If a choice would cost demo reliability, choose the reliable option. A working local-chain demo beats a flaky testnet one.
 

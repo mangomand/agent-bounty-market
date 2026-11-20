@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { testDigest } from "./digest.js";
 import { runCommand } from "./process.js";
-import { runSubmission, type SubmissionInput } from "./runner.js";
+import { runSubmission, sandboxRoot, type SubmissionInput } from "./runner.js";
 import type { ExecResult, SandboxExecutor, SandboxSpec } from "./sandbox.js";
 import { recoverReceiptSigner } from "./signer.js";
 
@@ -158,5 +158,24 @@ describe("runCommand", () => {
     } finally {
       delete process.env.RUNNER_SIGNER_PRIVATE_KEY;
     }
+  });
+});
+
+describe("sandbox dir", () => {
+  it("stages snapshots under ABM_SANDBOX_DIR and removes them afterwards", async () => {
+    const root = await mkdtemp(join(tmpdir(), "abm-sandbox-root-"));
+    try {
+      const fake = new FakeExecutor({});
+      await runSubmission(input(), { signing, signer, executor: fake, sandboxDir: root });
+      expect(fake.specs[0]?.snapshotDir.startsWith(root)).toBe(true);
+      expect(await readdir(root)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults to a directory under the home dir", () => {
+    expect(sandboxRoot({})).toBe(join(homedir(), ".abm", "sandbox"));
+    expect(sandboxRoot({ ABM_SANDBOX_DIR: "/x/y" })).toBe("/x/y");
   });
 });

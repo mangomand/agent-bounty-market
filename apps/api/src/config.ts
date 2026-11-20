@@ -8,5 +8,7 @@ export const config = {
   dbPath: process.env.API_DB_PATH ?? resolve(apiRoot, "data/abm.db"),
   runnerUrl: process.env.RUNNER_URL || undefined,
   runnerSigners: (process.env.RUNNER_SIGNER_ADDRESSES ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  /** Start runs automatically on submit (default on). Set AUTO_RUN=0 to drive runs via request_test_run. */
+  autoRun: process.env.AUTO_RUN !== "0",
   corsOrigins: (process.env.WEB_ORIGINS ?? "http://localhost:3000,http://127.0.0.1:3000").split(",").map((s) => s.trim()),
 };
