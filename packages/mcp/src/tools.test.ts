@@ -166,6 +166,33 @@ describe("tool calls", () => {
     expect(api.listBounties).toHaveBeenCalledWith("OPEN");
   });
 
+  it("lists only bounties still accepting submissions by default", async () => {
+    const api = fakeApi();
+    const now = Math.floor(Date.now() / 1000);
+    api.listBounties.mockResolvedValue([
+      { id: "bty_live", state: "OPEN", deadline: now + 600 },
+      { id: "bty_expired", state: "OPEN", deadline: now - 1 },
+    ]);
+    const ids = (r: CallToolResult) => JSON.parse(text(r)).map((b: { id: string; acceptingSubmissions: boolean }) => [b.id, b.acceptingSubmissions]);
+    expect(ids(await callTool(api, "list_bounties", {}))).toEqual([["bty_live", true]]);
+    expect(ids(await callTool(api, "list_bounties", { state: "OPEN" }))).toEqual([["bty_live", true], ["bty_expired", false]]);
+  });
+
+  it("shows a refunded bounty as closed", async () => {
+    const api = fakeApi();
+    const refundTx = `0x${"f".repeat(64)}`;
+    api.getBounty.mockResolvedValue({
+      id: "bty_demo1", state: "REFUNDED", deadline: 1, onchainId: "1", refundTxHash: refundTx, testCommand: "npm test", allowNetwork: false,
+    });
+    const spec = JSON.parse(text(await callTool(api, "get_bounty_spec", { bountyId: "bty_demo1" })));
+    expect(spec).toMatchObject({ state: "REFUNDED", acceptingSubmissions: false, refundTx });
+    expect(spec.howToSubmit).toEqual([expect.stringMatching(/refunded/)]);
+
+    const status = JSON.parse(text(await callTool(api, "get_submission_status", { submissionId: "sub_1" })));
+    expect(status).toMatchObject({ bountyState: "REFUNDED" });
+    expect(status.nextStep).toMatch(/refunded/);
+  });
+
   it("surfaces API errors as tool errors", async () => {
     const r = await callTool(fakeApi(), "get_bounty_spec", { bountyId: "bty_x" });
     expect(r.isError).toBe(true);

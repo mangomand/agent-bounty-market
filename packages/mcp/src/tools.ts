@@ -8,6 +8,7 @@ import {
   httpsUrlSchema,
   idSchema,
   MAX_TARBALL_BYTES,
+  type ApiBounty,
   type ApiReceipt,
   type ApiRun,
   type ApiSubmission,
@@ -34,7 +35,10 @@ const submissionId = idSchema("sub").describe("Submission id returned by submit_
 
 export const toolInputs = {
   list_bounties: z.strictObject({
-    state: z.enum(["OPEN", "AWARDED", "REFUNDED"]).optional().describe("Filter by state; defaults to OPEN"),
+    state: z
+      .enum(["OPEN", "AWARDED", "REFUNDED"])
+      .optional()
+      .describe("Filter by state. Omit to list only bounties still accepting submissions (OPEN and before the deadline)."),
   }),
   get_bounty_spec: z.strictObject({ bountyId }),
   download_repository: z.strictObject({ bountyId }),
@@ -57,18 +61,37 @@ export const toolInputs = {
 
 type Handlers = { [K in ToolName]: (api: BountyApi, args: z.infer<(typeof toolInputs)[K]>) => Promise<unknown> };
 
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** A bounty takes submissions only while OPEN and before its deadline (same rule as POST /bounties/:id/submissions). */
+export function acceptingSubmissions(b: Pick<ApiBounty, "state" | "deadline">, now = nowSec()): boolean {
+  return b.state === "OPEN" && b.deadline > now;
+}
+
+/** Why a bounty no longer takes submissions, or null if it does. */
+function closedReason(b: Pick<ApiBounty, "state" | "deadline">): string | null {
+  if (b.state === "REFUNDED") return "Closed: the creator refunded this bounty after its deadline. It will not pay out.";
+  if (b.state === "AWARDED") return "Closed: another submission was accepted and paid.";
+  if (!acceptingSubmissions(b)) return "Closed: the deadline has passed. The creator may refund it.";
+  return null;
+}
+
 const handlers: Handlers = {
   list_bounties: async (api, { state }) =>
-    (await api.listBounties(state ?? "OPEN")).map((b) => ({
-      id: b.id,
-      title: b.title,
-      amountUsdc: b.amountUsdc,
-      deadline: b.deadline,
-      state: b.state,
-      submissionCount: b.submissionCount,
-    })),
+    (await api.listBounties(state ?? "OPEN"))
+      .filter((b) => state !== undefined || acceptingSubmissions(b))
+      .map((b) => ({
+        id: b.id,
+        title: b.title,
+        amountUsdc: b.amountUsdc,
+        deadline: b.deadline,
+        state: b.state,
+        acceptingSubmissions: acceptingSubmissions(b),
+        submissionCount: b.submissionCount,
+      })),
   get_bounty_spec: async (api, { bountyId }) => {
     const b = await api.getBounty(bountyId);
+    const closed = closedReason(b);
     return {
       id: b.id,
       title: b.title,
@@ -84,10 +107,12 @@ const handlers: Handlers = {
       amountUsdc: b.amountUsdc,
       deadline: b.deadline,
       state: b.state,
+      acceptingSubmissions: closed === null,
       funded: b.onchainId !== null,
       onchainId: b.onchainId,
+      refundTx: b.refundTxHash,
       submissionCount: b.submissionCount,
-      howToSubmit: [
+      howToSubmit: closed ? [closed] : [
         `Make \`${b.testCommand}\` pass locally from the project root. The sandbox runs \`${BUILD_COMMAND}\` then \`${b.testCommand}\` with no network${b.allowNetwork ? " (network allowed for this bounty)" : ""}.`,
         "Commit, then call submit_code with the full commit hash, your payoutAddress, and either a public https repoUrl or sourceTarballBase64 (a .tar.gz of the tree, no node_modules).",
         "Build, tests, and security review start automatically. Poll get_submission_status until it says what to do next.",
@@ -102,7 +127,8 @@ const handlers: Handlers = {
   },
   get_submission_status: async (api, { submissionId }) => {
     const [{ submission, runs }, receipts] = await Promise.all([api.getSubmission(submissionId), api.getReceipts(submissionId)]);
-    return describeSubmission(submission, runs, receipts);
+    const bounty = await api.getBounty(submission.bountyId).catch(() => null);
+    return describeSubmission(submission, runs, receipts, bounty);
   },
   request_test_run: (api, { submissionId }) => api.requestRun(submissionId, "test"),
   request_security_review: (api, { submissionId }) => api.requestRun(submissionId, "security"),
@@ -112,9 +138,11 @@ const handlers: Handlers = {
 const BUILD_COMMAND = "npm run build --if-present";
 
 /** What the agent should do next, in one sentence. */
-export function nextStep(s: ApiSubmission, runs: ApiRun[]): string {
+export function nextStep(s: ApiSubmission, runs: ApiRun[], bounty?: Pick<ApiBounty, "state"> | null): string {
   const { build, test, security } = s.checks;
   if (s.state === "PAYOUT") return "Done: the creator accepted and the payout was sent.";
+  if (bounty?.state === "REFUNDED") return "Bounty closed: the creator refunded it after the deadline. Nothing more to do here; pick another with list_bounties.";
+  if (bounty?.state === "AWARDED") return "Bounty closed: another submission was accepted and paid. Pick another with list_bounties.";
   if ([build, test, security].includes("running")) return "A sandbox run is in progress. Poll again in a few seconds.";
   if (build === "failed") return "Build failed. Read lastRun.logs, fix it, commit, and submit_code again with the new commit.";
   if (test === "failed") return "Tests failed. Read lastRun.logs for the failing output, fix it, commit, and submit_code again.";
@@ -129,17 +157,18 @@ export function nextStep(s: ApiSubmission, runs: ApiRun[]): string {
   return "Waiting.";
 }
 
-function describeSubmission(s: ApiSubmission, runs: ApiRun[], receipts: ApiReceipt[]) {
+function describeSubmission(s: ApiSubmission, runs: ApiRun[], receipts: ApiReceipt[], bounty: ApiBounty | null) {
   const last = runs.at(-1);
   return {
     id: s.id,
     bountyId: s.bountyId,
+    bountyState: bounty?.state ?? null,
     agentId: s.agentId,
     commitHash: s.commitHash,
     payoutAddress: s.payoutAddress,
     workflowState: s.state,
     checks: s.checks,
-    nextStep: nextStep(s, runs),
+    nextStep: nextStep(s, runs, bounty),
     lastRun: last ? { id: last.id, kind: last.kind, status: last.status, error: last.error, logs: last.logs } : null,
     runs: runs.map((r) => ({ id: r.id, kind: r.kind, status: r.status, error: r.error })),
     receipts: receipts.map((r) => ({
@@ -155,7 +184,7 @@ function describeSubmission(s: ApiSubmission, runs: ApiRun[], receipts: ApiRecei
 }
 
 const descriptions: Record<ToolName, string> = {
-  list_bounties: "List bounties (open ones by default) with reward and deadline.",
+  list_bounties: "List bounties with reward and deadline. By default only ones still accepting submissions; refunded and awarded bounties are closed.",
   get_bounty_spec: "Get the locked spec, build and test commands, reward, and how to submit for one bounty.",
   download_repository: "Get the base repository URL, ref, and fixed test command for a bounty.",
   submit_code:
