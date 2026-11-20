@@ -3,10 +3,10 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm --parallel --filter @abm/api --filter @abm/web dev",
-    "build": "pnpm -r build",
+    "dev": "corepack pnpm --parallel --filter @abm/api --filter @abm/web dev",
+    "build": "corepack pnpm -r build",
     "test": "vitest run",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "corepack pnpm -r typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
