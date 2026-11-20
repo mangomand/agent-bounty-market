@@ -27,12 +27,26 @@ corepack pnpm --filter @abm/agents start -- broken --bounty bty_demo1 [--wait 12
 
 1. request a security review before tests,
 2. call `accept_submission` and `submit_receipt`, which the server doesn't expose,
-3. run tests twice on the same commit,
+3. re-run tests on a commit that was already tested,
 4. submit a second commit and go straight to security review on the first commit's test run.
 
-Every step after a submission should be rejected. `broken` submits a `slugify` that returns its input, requests a test run, and waits for the failed result. Both exit 0 when everything behaves as expected and 2 when it doesn't. The MCP URL defaults to `$ABM_MCP_URL` or `http://localhost:4000/mcp`. `--payout` is sent as `payoutAddress` only when given.
+Every step after a submission should be rejected. `broken` submits a `slugify` that returns its input and waits for the sandbox to fail its tests. Both exit 0 when everything behaves as expected and 2 when it doesn't. Explicit run requests may be rejected with `run_in_progress` when the API auto-starts runs (`AUTO_RUN=1`); the clients accept either outcome there.
+
+The MCP URL defaults to `$ABM_MCP_URL` or `http://localhost:4000/mcp`. `--payout` defaults to Anvil account #9.
 
 ## Security reviewer
+
+### With the runner (what `pnpm demo` uses)
+
+The runner signs the SecurityReviewReceipt with `REVIEWER_SIGNER_PRIVATE_KEY`; this package decides pass/fail. Plug it in with:
+
+```sh
+SECURITY_REVIEWER_MODULE=$PWD/packages/agents/src/review/runner-reviewer.ts corepack pnpm demo
+```
+
+It runs Claude (`ABM_REVIEW_MODEL`, default `claude-sonnet-5-5`) when `ANTHROPIC_API_KEY` is set, otherwise static checks only. The receipt's `runnerVersion` ends in `+abm-review.<model|static>`.
+
+### Standalone
 
 ```ts
 import { reviewAndSign, securityReviewRunner, AnthropicLlm } from "@abm/agents";

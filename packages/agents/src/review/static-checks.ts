@@ -66,6 +66,12 @@ export const STATIC_RULES: readonly Rule[] = [
       /["'`](?:\/(?:etc|root|home|Users|var|proc|sys|dev|tmp)\b|~\/|(?:\.\.\/){2,})|\bos\.homedir\s*\(|\bprocess\.chdir\s*\(|\bhomedir\s*\(\)/,
   },
   {
+    id: "install-script",
+    severity: "high",
+    message: "npm install hook runs code on install",
+    pattern: /"(?:pre|post)?install"\s*:/,
+  },
+  {
     id: "symlink",
     severity: "medium",
     message: "symlink in submission (not followed)",

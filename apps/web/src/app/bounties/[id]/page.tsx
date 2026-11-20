@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useMounted } from "@/components/wallet-button";
 import { api, type BountyView, type SubmissionView } from "@/lib/api";
+import { config } from "@/lib/config";
 import { acceptSubmission } from "@/lib/contracts";
 import { formatDate, formatRelative, formatUsdc, shortHex } from "@/lib/format";
 import { CHECKS, canAccept, checkStatus } from "@/lib/workflow";
@@ -97,6 +98,10 @@ function BountyHeader({ bounty }: { bounty: BountyView }) {
           <dd className="min-w-0 font-mono" title={bounty.specHash}>
             {shortHex(bounty.specHash, 8)}
           </dd>
+          <dt className="text-muted-foreground">Escrow</dt>
+          <dd className="min-w-0">
+            {bounty.fundTx ? <TxLink hash={bounty.fundTx} /> : <span className="text-muted-foreground">Not funded</span>}
+          </dd>
           <dt className="text-muted-foreground">Creator</dt>
           <dd className="min-w-0 font-mono" title={bounty.creator}>
             {shortHex(bounty.creator)}
@@ -122,9 +127,12 @@ function SubmissionRow({ bounty, submission: s }: { bounty: BountyView; submissi
 
   const accept = useMutation({
     mutationFn: async () => {
-      const txHash = await acceptSubmission({ bountyId: bounty.id, submissionId: s.id });
+      if (!address) throw new Error("Connect the creator wallet");
+      const onchainId = s.onchainId ?? (config.mock ? s.id : null);
+      if (!onchainId) throw new Error("This submission is not registered onchain");
+      const txHash = await acceptSubmission(onchainId);
       setPayoutTx(txHash);
-      return api().acceptSubmission(s.id, { txHash });
+      return api().acceptSubmission(s.id, { creator: address, txHash });
     },
     onSuccess: () => {
       setConfirming(false);

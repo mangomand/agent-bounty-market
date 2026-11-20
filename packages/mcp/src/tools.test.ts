@@ -7,6 +7,7 @@ import { createServer } from "./server";
 import { callTool, TOOL_NAMES } from "./tools";
 
 const COMMIT = "a".repeat(40);
+const PAYOUT = "0x90F79bf6EB2c4f870365E785982E1f101E93b906";
 
 function fakeApi(): BountyApi & { [K in keyof BountyApi]: ReturnType<typeof vi.fn> } {
   return {
@@ -16,7 +17,16 @@ function fakeApi(): BountyApi & { [K in keyof BountyApi]: ReturnType<typeof vi.f
     }),
     getRepository: vi.fn(async (id: string) => ({ bountyId: id, repoUrl: null, repoRef: null, testCommand: "npm test", allowNetwork: false })),
     createSubmission: vi.fn(async (bountyId: string) => ({ id: "sub_1", bountyId })),
-    getSubmission: vi.fn(async () => ({})),
+    getSubmission: vi.fn(async () => ({
+      submission: {
+        id: "sub_1", bountyId: "bty_demo1", agentId: "a", commitHash: COMMIT, payoutAddress: PAYOUT, state: "BUILD_VERIFIED",
+        checks: { build: "passed", test: "failed", security: "pending" }, onchainId: "3", submitTxHash: null, acceptTxHash: null,
+      },
+      runs: [{ id: "run_1", kind: "test", status: "finished", error: null, logs: "not ok 1 - slugify trims dashes" }],
+    })),
+    getReceipts: vi.fn(async () => [
+      { receiptType: "BuildReceipt", result: true, digest: `0x${"d".repeat(64)}`, txHash: `0x${"e".repeat(64)}`, signer: PAYOUT, runnerVersion: "r" },
+    ]),
     requestRun: vi.fn(async (submissionId: string, kind: string) => ({ id: "run_1", submissionId, kind })),
   } as never;
 }
@@ -58,7 +68,9 @@ describe("input validation", () => {
     ["request_security_review", { submissionId: "" }],
     ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: "HEAD", repoUrl: "https://g.com/r" }],
     ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: COMMIT, repoUrl: "http://g.com/r" }],
-    ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: COMMIT }],
+    ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: COMMIT, payoutAddress: PAYOUT }],
+    ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: COMMIT, repoUrl: "https://g.com/r" }],
+    ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: COMMIT, repoUrl: "https://g.com/r", payoutAddress: "0x123" }],
     ["submit_code", { bountyId: "bty_ok", agentId: "a", commitHash: COMMIT, repoUrl: "https://g.com/r", sourceTarballBase64: "aGk=" }],
     ["submit_code", { bountyId: "bty_ok", agentId: "a/../b", commitHash: COMMIT, repoUrl: "https://g.com/r" }],
   ];
@@ -91,10 +103,15 @@ describe("tool calls", () => {
     const client = await connect(api);
     const r = (await client.callTool({
       name: "submit_code",
-      arguments: { bountyId: "bty_demo1", agentId: "fast-agent", commitHash: COMMIT, repoUrl: "https://github.com/x/y" },
+      arguments: { bountyId: "bty_demo1", agentId: "fast-agent", commitHash: COMMIT, payoutAddress: PAYOUT, repoUrl: "https://github.com/x/y" },
     })) as CallToolResult;
     expect(r.isError).toBeFalsy();
-    expect(api.createSubmission).toHaveBeenCalledWith("bty_demo1", { agentId: "fast-agent", commitHash: COMMIT, repoUrl: "https://github.com/x/y" });
+    expect(api.createSubmission).toHaveBeenCalledWith("bty_demo1", {
+      agentId: "fast-agent",
+      commitHash: COMMIT,
+      payoutAddress: PAYOUT,
+      repoUrl: "https://github.com/x/y",
+    });
     expect(JSON.parse(text(r))).toMatchObject({ id: "sub_1" });
   });
 
@@ -103,6 +120,18 @@ describe("tool calls", () => {
     await callTool(api, "request_test_run", { submissionId: "sub_1" });
     await callTool(api, "request_security_review", { submissionId: "sub_1" });
     expect(api.requestRun.mock.calls).toEqual([["sub_1", "test"], ["sub_1", "security"]]);
+  });
+
+  it("get_submission_status returns state, failing output, next step, and receipt digests", async () => {
+    const r = await callTool(fakeApi(), "get_submission_status", { submissionId: "sub_1" });
+    const body = JSON.parse(text(r));
+    expect(body).toMatchObject({
+      workflowState: "BUILD_VERIFIED",
+      lastRun: { kind: "test", logs: "not ok 1 - slugify trims dashes" },
+      receipts: [{ type: "BuildReceipt", digest: `0x${"d".repeat(64)}`, relayTx: `0x${"e".repeat(64)}` }],
+      onchain: { submissionId: "3" },
+    });
+    expect(body.nextStep).toMatch(/Tests failed/);
   });
 
   it("list_bounties defaults to OPEN", async () => {
@@ -128,7 +157,7 @@ describe("http client", () => {
     const api = httpApi("http://127.0.0.1:4000", fetchImpl);
     await api.listBounties("OPEN");
     await api.getRepository("bty_a");
-    await api.createSubmission("bty_a", { agentId: "x", commitHash: COMMIT, repoUrl: "https://g.com/r" });
+    await api.createSubmission("bty_a", { agentId: "x", commitHash: COMMIT, payoutAddress: PAYOUT, repoUrl: "https://g.com/r" });
     await api.requestRun("sub_a", "test");
     expect(calls).toEqual([
       ["GET", "/bounties?state=OPEN"],

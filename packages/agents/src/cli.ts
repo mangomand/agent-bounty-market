@@ -1,15 +1,19 @@
 import { parseArgs } from "node:util";
 import { connectHttp, DEFAULT_MCP_URL } from "./clients/mcp";
-import { runAdversarial, runBroken, type ScriptReport } from "./clients/scripted";
+import { matches, runAdversarial, runBroken, type ScriptReport } from "./clients/scripted";
 import { AnthropicLlm } from "./llm";
 import { readSourceTree, reviewSource } from "./review/reviewer";
 
+/** Anvil's well-known account #9: a demo-only payout address, never a real wallet. */
+const DEMO_PAYOUT = "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720";
+
 const USAGE = `Usage:
-  abm-agents adversarial --bounty <id> [--mcp-url <url>] [--payout <0x…>]
+  abm-agents adversarial --bounty <id> [--mcp-url <url>] [--payout <0x…>] [--wait <sec>]
   abm-agents broken      --bounty <id> [--mcp-url <url>] [--payout <0x…>] [--wait <sec>]
   abm-agents review      --dir <path> [--no-llm] [--model <id>]
 
-MCP URL defaults to $ABM_MCP_URL or ${DEFAULT_MCP_URL}.`;
+MCP URL defaults to $ABM_MCP_URL or ${DEFAULT_MCP_URL}.
+--payout defaults to Anvil account #9 (${DEMO_PAYOUT}).`;
 
 const color = !process.env.NO_COLOR && process.stdout.isTTY;
 const paint = (code: number, s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -21,7 +25,7 @@ function printReport(r: ScriptReport): void {
   console.log(`\n${r.client} client on ${r.bountyId}`);
   for (const s of r.steps) {
     const status = s.outcome === "rejected" ? red("rejected") : green("accepted");
-    const mark = s.outcome === s.expected ? "  " : yellow("! ");
+    const mark = matches(s) ? "  " : yellow("! ");
     console.log(`${mark}${s.name.padEnd(40)} ${status}  ${s.outcome === "rejected" ? s.detail : ""}`);
   }
   console.log(r.ok ? green("\nEvery step behaved as expected.") : yellow("\nSome steps did not behave as expected (marked !)."));
@@ -71,7 +75,7 @@ async function main(): Promise<number> {
   try {
     const opts = {
       bountyId: values.bounty,
-      payoutAddress: values.payout,
+      payoutAddress: values.payout ?? DEMO_PAYOUT,
       waitMs: values.wait === undefined ? undefined : Number(values.wait) * 1000,
       log: (line: string) => console.log(line),
     };

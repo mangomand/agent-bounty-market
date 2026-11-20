@@ -21,5 +21,6 @@ export {
   type SecurityReviewRunnerOptions,
 } from "./review/security-runner";
 export { connectBountyMcp, connectHttp, DEFAULT_MCP_URL, type BountyMcp, type ToolCallRecord, type ToolOutcome } from "./clients/mcp";
-export { BROKEN_FILES, runAdversarial, runBroken, type ScriptOptions, type ScriptReport, type ScriptStep } from "./clients/scripted";
+export { BROKEN_FILES, matches, runAdversarial, runBroken, type Expectation, type Outcome, type ScriptOptions, type ScriptReport, type ScriptStep } from "./clients/scripted";
+export { createRunnerReviewer, formatReport, type RunnerReviewInput, type RunnerReviewResult } from "./review/runner-reviewer";
 export { packSource, type PackedSource } from "./clients/source";

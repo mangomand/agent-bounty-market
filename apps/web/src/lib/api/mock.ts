@@ -165,6 +165,12 @@ export function createMockClient(now: () => number = Date.now): ApiClient {
       bounties.push(bounty);
       return delay(bounty, 400);
     },
+    recordFunding: async (bountyId, txHash) => {
+      const bounty = findBounty(bountyId);
+      bounty.fundTx = txHash;
+      bounty.onchainId = bountyId;
+      return delay(bounty, 200);
+    },
     acceptSubmission: async (submissionId, input) => {
       const sub = submissions.find((s) => s.id === submissionId);
       if (!sub) throw new ApiError("Submission not found", 404);

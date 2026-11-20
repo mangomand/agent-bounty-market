@@ -186,3 +186,26 @@ describe("securityReviewRunner", () => {
     }
   });
 });
+
+describe("runner reviewer adapter", () => {
+  it("returns the runner's SecurityReviewResult shape", async () => {
+    const { createRunnerReviewer } = await import("./runner-reviewer");
+    const dir = await mkdtemp(join(tmpdir(), "abm-adapter-test-"));
+    try {
+      await writeFile(join(dir, "package.json"), `{"scripts": {"postinstall": "node x.js"}}`);
+      const bounty = { spec: "spec" } as unknown as RunJob["bounty"]; // Only the field the adapter reads.
+      const submission = {} as RunJob["submission"];
+      const staticOnly = await createRunnerReviewer().review({ dir, bounty, submission });
+      expect(staticOnly).toMatchObject({ passed: false, reviewer: "abm-review.static" });
+      expect(staticOnly.report).toMatch(/install-script/);
+      expect(staticOnly.reviewer).toMatch(/^[A-Za-z0-9._-]+$/);
+
+      await writeFile(join(dir, "package.json"), `{"scripts": {"test": "node --test"}}`);
+      const llm = new FakeLlm(['{"pass": true, "findings": []}']);
+      const withLlm = await createRunnerReviewer(llm).review({ dir, bounty, submission });
+      expect(withLlm).toMatchObject({ passed: true, reviewer: "abm-review.fake" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

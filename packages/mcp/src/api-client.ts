@@ -1,5 +1,6 @@
 import type {
   ApiBounty,
+  ApiReceipt,
   ApiRun,
   ApiSubmission,
   CreateSubmissionRequest,
@@ -20,6 +21,7 @@ export interface BountyApi {
   getRepository(id: string): Promise<RepositoryInfo>;
   createSubmission(bountyId: string, body: CreateSubmissionRequest): Promise<ApiSubmission>;
   getSubmission(id: string): Promise<{ submission: ApiSubmission; runs: ApiRun[] }>;
+  getReceipts(submissionId: string): Promise<ApiReceipt[]>;
   requestRun(submissionId: string, kind: RunKind): Promise<ApiRun>;
 }
 
@@ -45,6 +47,7 @@ export function httpApi(baseUrl: string, fetchImpl: typeof fetch = fetch): Bount
     createSubmission: async (bountyId, body) =>
       (await call<{ submission: ApiSubmission }>("POST", `/bounties/${e(bountyId)}/submissions`, body)).submission,
     getSubmission: (id) => call("GET", `/submissions/${e(id)}`),
+    getReceipts: async (id) => (await call<{ receipts: ApiReceipt[] }>("GET", `/submissions/${e(id)}/receipts`)).receipts,
     requestRun: async (id, kind) => (await call<{ run: ApiRun }>("POST", `/submissions/${e(id)}/runs`, { kind })).run,
   };
 }

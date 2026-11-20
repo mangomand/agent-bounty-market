@@ -25,8 +25,8 @@ describe("mock client", () => {
 
   it("accepts only a fully verified submission, once", async () => {
     const client = createMockClient();
-    await expect(client.acceptSubmission("s-102", { txHash: "0x01" })).rejects.toThrow(/not passed/);
-    const paid = await settle(client.acceptSubmission("s-101", { txHash: "0x02" }));
+    await expect(client.acceptSubmission("s-102", { creator: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", txHash: "0x01" })).rejects.toThrow(/not passed/);
+    const paid = await settle(client.acceptSubmission("s-101", { creator: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", txHash: "0x02" }));
     expect(paid.state).toBe("PAYOUT");
     expect(paid.payoutTx).toBe("0x02");
     expect((await settle(client.getBounty("1"))).state).toBe("AWARDED");

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { TOOL_NAMES } from "@abm/mcp/src/tools";
+import { TOOL_NAMES } from "@abm/mcp";
 
 const asset = (p: string) => readFile(fileURLToPath(new URL(`../claude-code/${p}`, import.meta.url)), "utf8");
 
@@ -32,7 +32,7 @@ describe("Claude Code assets", () => {
       expect(md).toContain(`\`${tool}\``);
     expect(md).toMatch(/payoutAddress/);
     expect(md).toMatch(/testCommand/);
-    const named = [...md.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((x) => x[1]);
+    const named = [...md.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((x) => x[1]).filter((n) => n !== "node_modules");
     for (const t of named) expect(TOOL_NAMES as readonly string[]).toContain(t);
     expect(md.split("\n").length).toBeLessThan(80);
   });
