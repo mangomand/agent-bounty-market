@@ -4,7 +4,20 @@ import type { Db } from "./db";
 const sha256 = (s: string) => `0x${createHash("sha256").update(s).digest("hex")}`;
 const DEMO_CREATOR = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"; // Anvil account #0
 
-export const DEMO = [
+/** Seconds until the refund-demo bounty's deadline passes, counted from seeding. */
+export const REFUND_DEMO_DEADLINE_SECS = 120;
+
+interface DemoBountyDef {
+  id: string;
+  title: string;
+  spec: string;
+  amountUsdc: string;
+  testCommand: string;
+  /** Seconds from seeding to the deadline. Defaults to 7 days. */
+  deadlineIn?: number;
+}
+
+export const DEMO: DemoBountyDef[] = [
   {
     id: "bty_demo1",
     title: "Add a slugify() utility",
@@ -26,16 +39,26 @@ export const DEMO = [
     amountUsdc: "200",
     testCommand: "npm test",
   },
+  {
+    // Nobody solves this one: its deadline passes a couple of minutes after `pnpm demo` starts,
+    // so the creator can show the refund.
+    id: "bty_demo4",
+    title: "Port date helpers to Temporal",
+    spec: "Replace the Date-based helpers in src/dates.ts with Temporal equivalents. Same exports, same results across time zones. Tests in test/dates.test.ts.",
+    amountUsdc: "75",
+    testCommand: "npm test",
+    deadlineIn: REFUND_DEMO_DEADLINE_SECS,
+  },
 ];
 
-export type DemoBounty = (typeof DEMO)[number];
+export type DemoBounty = DemoBountyDef;
 
 /** Hashes locked onchain for a demo bounty. */
 export function demoHashes(b: DemoBounty) {
   return { specHash: sha256(b.spec) as `0x${string}`, testSuiteHash: sha256(`${b.id}:tests`) as `0x${string}` };
 }
 
-export const demoDeadline = (nowSec: number) => nowSec + 7 * 24 * 3600;
+export const demoDeadline = (nowSec: number, b?: Pick<DemoBounty, "deadlineIn">) => nowSec + (b?.deadlineIn ?? 7 * 24 * 3600);
 
 /** Onchain funding for a demo bounty, written by seed-onchain.ts. */
 export interface DemoFunding {
@@ -61,7 +84,7 @@ export function seed(db: Db, nowSec = Math.floor(Date.now() / 1000), funded?: Re
     if (funded && !f) return;
     const { specHash, testSuiteHash } = demoHashes(b);
     const r = insert.run(b.id, b.title, "", b.spec, specHash, testSuiteHash, b.amountUsdc, (f?.creator ?? DEMO_CREATOR).toLowerCase(),
-      f?.deadline ?? demoDeadline(nowSec), null, null, b.testCommand, f?.onchainId ?? null, f?.fundTxHash ?? null, nowSec - (DEMO.length - i));
+      f?.deadline ?? demoDeadline(nowSec, b), null, null, b.testCommand, f?.onchainId ?? null, f?.fundTxHash ?? null, nowSec - (DEMO.length - i));
     n += Number(r.changes);
   });
   return n;

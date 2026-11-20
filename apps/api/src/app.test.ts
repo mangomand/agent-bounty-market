@@ -2,6 +2,7 @@ import { gzipSync } from "node:zlib";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ApiEvent, RunJob, RunnerClient, SignedReceipt } from "@abm/shared";
 import { createApp } from "./app";
+import { ChainError, type ChainClient } from "./chain";
 import { openDb } from "./db";
 import { seed } from "./seed";
 
@@ -45,9 +46,10 @@ function fakeRunner(opts: { fail?: boolean } = {}): RunnerClient & { jobs: RunJo
   };
 }
 
-function setup(runner: RunnerClient = fakeRunner()) {
+function setup(runner: RunnerClient = fakeRunner(), opts: { chain?: ChainClient } = {}) {
   const db = openDb(":memory:");
-  const ctx = createApp({ db, runner, runnerSigners: [SIGNER], now: () => NOW });
+  const clock = { now: NOW };
+  const ctx = createApp({ db, runner, runnerSigners: [SIGNER], now: () => clock.now, chain: opts.chain });
   const events: ApiEvent[] = [];
   ctx.events.on("event", (e: ApiEvent) => events.push(e));
   const req = async (method: string, path: string, body?: unknown) => {
@@ -59,7 +61,7 @@ function setup(runner: RunnerClient = fakeRunner()) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper; responses are asserted field by field
     return { status: res.status, body: (await res.json()) as any };
   };
-  return { ...ctx, db, req, events };
+  return { ...ctx, db, req, events, clock };
 }
 
 const bountyBody = {
@@ -115,10 +117,88 @@ describe("bounties", () => {
   });
 
   it("seeds demo bounties idempotently", async () => {
-    expect(seed(t.db, NOW)).toBe(3);
+    expect(seed(t.db, NOW)).toBe(4);
     expect(seed(t.db, NOW)).toBe(0);
     const list = await t.req("GET", "/bounties");
-    expect(list.body.bounties.map((b: { id: string }) => b.id)).toEqual(["bty_demo3", "bty_demo2", "bty_demo1"]);
+    expect(list.body.bounties.map((b: { id: string }) => b.id)).toEqual(["bty_demo4", "bty_demo3", "bty_demo2", "bty_demo1"]);
+    // The refund-demo bounty expires soon after seeding.
+    expect(list.body.bounties[0].deadline).toBe(NOW + 120);
+  });
+});
+
+describe("refunds", () => {
+  const funded = { ...bountyBody, onchainId: "9" };
+
+  it("allows a refund only after the deadline, then mirrors REFUNDED", async () => {
+    const t = setup();
+    const b = (await t.req("POST", "/bounties", funded)).body.bounty;
+    expect(b).toMatchObject({ canRefund: false, refundTxHash: null });
+
+    const early = await t.req("POST", `/bounties/${b.id}/refund`, { creator: CREATOR, txHash: H("d") });
+    expect(early.status).toBe(409);
+    expect(early.body.error.code).toBe("deadline_not_reached");
+
+    // The contract requires block.timestamp > deadline, so the deadline second itself is too early.
+    t.clock.now = funded.deadline;
+    expect((await t.req("GET", `/bounties/${b.id}`)).body.bounty.canRefund).toBe(false);
+    t.clock.now = funded.deadline + 1;
+    expect((await t.req("GET", `/bounties/${b.id}`)).body.bounty.canRefund).toBe(true);
+
+    const notCreator = await t.req("POST", `/bounties/${b.id}/refund`, { creator: SIGNER, txHash: H("d") });
+    expect(notCreator.status).toBe(403);
+
+    const refunded = await t.req("POST", `/bounties/${b.id}/refund`, { creator: CREATOR, txHash: H("d") });
+    expect(refunded.status).toBe(200);
+    expect(refunded.body.bounty).toMatchObject({ state: "REFUNDED", refundTxHash: H("d"), canRefund: false });
+    expect(t.events.at(-1)).toMatchObject({ type: "bounty.updated", bountyId: b.id, bounty: { state: "REFUNDED" } });
+
+    expect((await t.req("POST", `/bounties/${b.id}/refund`, { creator: CREATOR, txHash: H("c") })).body.error.code).toBe("bounty_closed");
+    expect((await t.req("GET", "/bounties?state=REFUNDED")).body.bounties.map((x: { id: string }) => x.id)).toEqual([b.id]);
+    expect((await t.req("GET", "/bounties?state=OPEN")).body.bounties).toEqual([]);
+  });
+
+  it("never offers a refund for an unfunded or awarded bounty", async () => {
+    const t = setup();
+    const unfunded = (await t.req("POST", "/bounties", bountyBody)).body.bounty;
+    t.clock.now = bountyBody.deadline + 1;
+    expect((await t.req("GET", `/bounties/${unfunded.id}`)).body.bounty.canRefund).toBe(false);
+    expect((await t.req("POST", `/bounties/${unfunded.id}/refund`, { creator: CREATOR, txHash: H("d") })).body.error.code).toBe("not_funded");
+
+    const awarded = (await t.req("POST", "/bounties", { ...funded, deadline: t.clock.now + 10 })).body.bounty;
+    t.db.prepare("UPDATE bounties SET state = 'AWARDED' WHERE id = ?").run(awarded.id);
+    t.clock.now += 100;
+    expect((await t.req("GET", `/bounties/${awarded.id}`)).body.bounty.canRefund).toBe(false);
+    expect((await t.req("POST", `/bounties/${awarded.id}/refund`, { creator: CREATOR, txHash: H("d") })).body.error.code).toBe("bounty_closed");
+  });
+
+  it("checks the BountyRefunded event in the creator's tx when a chain is configured", async () => {
+    const refunds = new Map<string, { bountyId: string; creator: string; from: string; amount: bigint }>([
+      [H("1"), { bountyId: "9", creator: CREATOR, from: CREATOR, amount: 50_000_000n }],
+      [H("2"), { bountyId: "9", creator: CREATOR, from: SIGNER, amount: 50_000_000n }],
+      [H("3"), { bountyId: "9", creator: CREATOR, from: CREATOR, amount: 1n }],
+    ]);
+    // Only verifyRefund is reached in this test; the rest of the client is unused.
+    const chain = {
+      async verifyRefund(txHash: string, bountyOnchainId: string) {
+        const r = refunds.get(txHash);
+        if (!r || r.bountyId !== bountyOnchainId) throw new ChainError("transaction did not refund this bounty");
+        return r;
+      },
+    } as unknown as ChainClient;
+    const t = setup(fakeRunner(), { chain });
+    // Seed directly: with a chain, POST /bounties would verify a funding tx.
+    seed(t.db, NOW);
+    t.db.prepare("UPDATE bounties SET onchain_id = '9', creator = ? WHERE id = 'bty_demo1'").run(CREATOR);
+    const amount = (await t.req("GET", "/bounties/bty_demo1")).body.bounty.amountUsdc;
+    expect(amount).toBe("50");
+
+    const refund = (txHash: string) => t.req("POST", "/bounties/bty_demo1/refund", { creator: CREATOR, txHash });
+    expect((await refund(H("4"))).body.error.code).toBe("onchain_rejected");
+    expect((await refund(H("2"))).status).toBe(403);
+    expect((await refund(H("3"))).body.error.code).toBe("onchain_mismatch");
+    const ok = await refund(H("1"));
+    expect(ok.status).toBe(200);
+    expect(ok.body.bounty).toMatchObject({ state: "REFUNDED", refundTxHash: H("1") });
   });
 });
 
@@ -190,7 +270,7 @@ describe("runs and receipts", () => {
     const accepted = await t.req("POST", `/submissions/${ids.submissionId}/accept`, { creator: CREATOR, txHash: H("f") });
     expect(accepted.status).toBe(200);
     expect(accepted.body.submission).toMatchObject({ state: "PAYOUT", acceptTxHash: H("f") });
-    expect(accepted.body.bounty).toMatchObject({ state: "AWARDED", acceptedSubmissionId: ids.submissionId, payoutTxHash: H("f") });
+    expect(accepted.body.bounty).toMatchObject({ state: "AWARDED", acceptedSubmissionId: ids.submissionId, payoutTxHash: H("f"), canRefund: false });
     expect((await t.req("POST", `/submissions/${ids.submissionId}/accept`, { creator: CREATOR, txHash: H("e") })).status).toBe(409);
 
     const types = t.events.map((e) => e.type);

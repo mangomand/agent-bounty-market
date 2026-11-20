@@ -9,6 +9,10 @@ export interface BountyView extends Bounty {
   fundTx?: Hex;
   /** Bounty id in the contract; null until funded. */
   onchainId?: string | null;
+  /** The contract would accept `refund` from the creator now (funded, open, past the deadline). */
+  canRefund?: boolean;
+  /** Set once the creator refunded the escrow. */
+  refundTx?: Hex;
 }
 
 /** Submission as returned by the API, with failure and payout details. */
@@ -38,6 +42,12 @@ export interface AcceptInput {
   txHash: Hex;
 }
 
+export interface RefundInput {
+  /** Wallet that sent the refund tx; must be the bounty creator. */
+  creator: Hex;
+  txHash: Hex;
+}
+
 export interface ApiClient {
   listBounties(): Promise<BountyView[]>;
   getBounty(id: string): Promise<BountyView>;
@@ -46,6 +56,8 @@ export interface ApiClient {
   /** Links a posted bounty to the creator's onchain `createBounty` tx. The API verifies it. */
   recordFunding(bountyId: string, txHash: Hex): Promise<BountyView>;
   acceptSubmission(submissionId: string, input: AcceptInput): Promise<SubmissionView>;
+  /** Records the creator's onchain `refund` tx. The API verifies it. */
+  recordRefund(bountyId: string, input: RefundInput): Promise<BountyView>;
 }
 
 export class ApiError extends Error {

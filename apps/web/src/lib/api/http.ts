@@ -22,6 +22,8 @@ export function toBountyView(b: ApiBounty): BountyView {
     submissionCount: b.submissionCount,
     fundTx: b.fundTxHash ?? undefined,
     onchainId: b.onchainId,
+    canRefund: b.canRefund,
+    refundTx: b.refundTxHash ?? undefined,
   };
 }
 
@@ -96,5 +98,7 @@ export function createHttpClient(baseUrl: string, fetchImpl: typeof fetch = fetc
       toBountyView((await request<{ bounty: ApiBounty }>(`/bounties/${id(bountyId)}/fund`, post({ txHash }))).bounty),
     acceptSubmission: async (submissionId, input) =>
       toSubmissionView((await request<{ submission: ApiSubmission }>(`/submissions/${id(submissionId)}/accept`, post(input))).submission),
+    recordRefund: async (bountyId, input) =>
+      toBountyView((await request<{ bounty: ApiBounty }>(`/bounties/${id(bountyId)}/refund`, post(input))).bounty),
   };
 }

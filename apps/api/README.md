@@ -52,6 +52,7 @@ Ids look like `bty_…`, `sub_…`, `rcpt_…` and `run_…`. Timestamps are uni
 Newest first.
 
 ### `GET /bounties/:id` → `{ bounty: ApiBounty }`
+`canRefund` is `true` when the contract would accept `refund` from the creator right now: the bounty is funded, still `OPEN`, and `now > deadline`. `refundTxHash` is set once it is refunded.
 
 ### `POST /bounties` → `201 { bounty: ApiBounty }`
 Body is `CreateBountyRequest`:
@@ -79,6 +80,9 @@ Body is `CreateBountyRequest`:
 Body is `{ "txHash": "0x…" }`, the creator's `createBounty` tx. The API reads the `BountyCreated` event and checks creator, hashes, amount, and deadline before storing `onchainId`. Errors: `onchain_rejected`, `already_funded`, `duplicate`.
 
 With a chain configured, `POST /bounties` only accepts `onchainId` together with `fundTxHash`, and derives the id from the tx.
+
+### `POST /bounties/:id/refund` → `{ bounty: ApiBounty }`
+Body is `{ "creator": "0x…", "txHash": "0x…" }`. The creator's wallet sends `refund(onchainId)` first; the contract allows it only after the deadline and only while no submission has been accepted. With a chain, the API checks the tx emitted `BountyRefunded` for this bounty, was sent by the creator, and returned the full amount. The bounty becomes `REFUNDED` with `refundTxHash = txHash`, and a `bounty.updated` event goes out. Errors: `not_creator`, `bounty_closed`, `not_funded`, `onchain_rejected`, `deadline_not_reached` (no chain only).
 
 ### `GET /bounties/:id/repository` → `{ repository: RepositoryInfo }`
 Returns the base repo URL, ref, fixed test command, and network flag. The MCP `download_repository` tool uses this route.
@@ -140,7 +144,7 @@ Uses `text/event-stream`. The SSE `event:` name equals `data.type`, and `data` i
 | event | data |
 |---|---|
 | `ready` | `{ bountyId \| null }`, sent once on connect |
-| `bounty.created` / `bounty.updated` | `{ bounty }` |
+| `bounty.created` / `bounty.updated` | `{ bounty }` (funded, awarded, or refunded) |
 | `submission.created` / `submission.updated` | `{ submission }` |
 | `run.started` / `run.finished` | `{ run }` |
 | `receipt.created` | `{ receipt }` |
