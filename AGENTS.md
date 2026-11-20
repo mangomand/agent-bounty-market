@@ -66,7 +66,7 @@ apps/cli/          Developer CLI (Ink TUI)
 apps/api/          Local API shared by web, CLI, and MCP server
 packages/mcp/      MCP server (bounty discovery + submission tools)
 packages/runner/   Docker sandbox runner + receipt signing
-packages/agents/   Demo coding agents (fast/careless, test-focused, security-focused)
+packages/agents/   Security reviewer, scripted demo clients, Claude Code setup (.mcp.json + skill)
 packages/shared/   Shared types, EIP-712 schemas, contract ABIs
 contracts/         Foundry project (src/, test/, script/)
 ```
