@@ -7,7 +7,8 @@
     "build": "corepack pnpm -r build",
     "test": "vitest run",
     "typecheck": "corepack pnpm -r typecheck",
-    "demo": "node scripts/demo.mjs"
+    "demo": "node scripts/demo.mjs",
+    "demo:agents": "corepack pnpm --silent --filter @abm/agents demo"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

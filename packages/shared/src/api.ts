@@ -64,6 +64,13 @@ export interface ApiBounty extends Bounty {
   /** Set once a submission is accepted. */
   acceptedSubmissionId: string | null;
   payoutTxHash: Hex | null;
+  /** Set once the creator has refunded the escrow (`refund` emitted BountyRefunded). */
+  refundTxHash: Hex | null;
+  /**
+   * True when the contract would accept `refund` from the creator now: the bounty is funded,
+   * still open (no accepted submission), and the deadline has passed (`block.timestamp > deadline`).
+   */
+  canRefund: boolean;
   createdAt: number;
   submissionCount: number;
 }
@@ -209,6 +216,16 @@ export const acceptSubmissionSchema = z.object({
   txHash: txHashSchema,
 });
 export type AcceptSubmissionRequest = z.infer<typeof acceptSubmissionSchema>;
+
+// ---------- refund ----------
+
+export const refundBountySchema = z.object({
+  /** Address of the creator; must match the bounty creator. */
+  creator: addressSchema,
+  /** Hash of the creator's onchain `refund` transaction. The API reads the BountyRefunded event from it. */
+  txHash: txHashSchema,
+});
+export type RefundBountyRequest = z.infer<typeof refundBountySchema>;
 
 // ---------- events (SSE) ----------
 

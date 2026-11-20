@@ -5,6 +5,7 @@ Developers bring their own Claude Code. This package holds what goes around it:
 - **Claude Code setup** (`claude-code/`): `.mcp.json` and the `bounty-hunter` skill.
 - **Security reviewer**: static checks, an LLM review, and an EIP-712 `SecurityReviewReceipt`.
 - **Scripted demo clients**: `adversarial` and `broken`, with no LLM, used only through the public MCP tools.
+- **Presenter demo** (`src/demo.ts`, `corepack pnpm demo:agents [honest|rigged|attack]`): an honest agent, a rigged agent, and 12 onchain/API attacks. See [demo/README.md](../../demo/README.md).
 
 ## Claude Code
 
@@ -37,6 +38,8 @@ The MCP URL defaults to `$ABM_MCP_URL` or `http://localhost:4000/mcp`. `--payout
 ## Security reviewer
 
 ### With the runner (what `pnpm demo` uses)
+
+`pnpm demo` sets this module automatically. Without `ANTHROPIC_API_KEY` in your shell the review is static-only and deterministic, which is what the rehearsed demo expects.
 
 The runner signs the SecurityReviewReceipt with `REVIEWER_SIGNER_PRIVATE_KEY`; this package decides pass/fail. Plug it in with:
 

@@ -95,6 +95,32 @@ describe("input validation", () => {
     expect(r.isError).toBe(true);
     expect(api.requestRun).not.toHaveBeenCalled();
   });
+
+  const validSubmit = { bountyId: "bty_demo1", agentId: "a", commitHash: COMMIT, payoutAddress: PAYOUT, repoUrl: "https://github.com/x/y" };
+  const unknownKeys: [string, Record<string, unknown>, string[]][] = [
+    ["submit_code", { ...validSubmit, accept: true }, ["accept"]],
+    ["submit_code", { ...validSubmit, payoutAddressOverride: PAYOUT, skipTests: true }, ["payoutAddressOverride", "skipTests"]],
+    ["request_test_run", { submissionId: "sub_1", force: true }, ["force"]],
+    ["list_bounties", { includeKeys: true }, ["includeKeys"]],
+  ];
+
+  it.each(unknownKeys)("rejects unknown keys over the MCP protocol: %s %j", async (name, args, keys) => {
+    const api = fakeApi();
+    const client = await connect(api);
+    const r = (await client.callTool({ name, arguments: args })) as CallToolResult;
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/invalid input/);
+    for (const k of keys) expect(text(r)).toContain(k);
+    for (const fn of Object.values(api)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("advertises additionalProperties: false for every tool", async () => {
+    const client = await connect(fakeApi());
+    const { tools } = await client.listTools();
+    for (const t of tools) expect(t.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
+    const submit = tools.find((t) => t.name === "submit_code")!;
+    expect(submit.inputSchema.required?.sort()).toEqual(["agentId", "bountyId", "commitHash", "payoutAddress"]);
+  });
 });
 
 describe("tool calls", () => {
@@ -138,6 +164,33 @@ describe("tool calls", () => {
     const api = fakeApi();
     await callTool(api, "list_bounties", {});
     expect(api.listBounties).toHaveBeenCalledWith("OPEN");
+  });
+
+  it("lists only bounties still accepting submissions by default", async () => {
+    const api = fakeApi();
+    const now = Math.floor(Date.now() / 1000);
+    api.listBounties.mockResolvedValue([
+      { id: "bty_live", state: "OPEN", deadline: now + 600 },
+      { id: "bty_expired", state: "OPEN", deadline: now - 1 },
+    ]);
+    const ids = (r: CallToolResult) => JSON.parse(text(r)).map((b: { id: string; acceptingSubmissions: boolean }) => [b.id, b.acceptingSubmissions]);
+    expect(ids(await callTool(api, "list_bounties", {}))).toEqual([["bty_live", true]]);
+    expect(ids(await callTool(api, "list_bounties", { state: "OPEN" }))).toEqual([["bty_live", true], ["bty_expired", false]]);
+  });
+
+  it("shows a refunded bounty as closed", async () => {
+    const api = fakeApi();
+    const refundTx = `0x${"f".repeat(64)}`;
+    api.getBounty.mockResolvedValue({
+      id: "bty_demo1", state: "REFUNDED", deadline: 1, onchainId: "1", refundTxHash: refundTx, testCommand: "npm test", allowNetwork: false,
+    });
+    const spec = JSON.parse(text(await callTool(api, "get_bounty_spec", { bountyId: "bty_demo1" })));
+    expect(spec).toMatchObject({ state: "REFUNDED", acceptingSubmissions: false, refundTx });
+    expect(spec.howToSubmit).toEqual([expect.stringMatching(/refunded/)]);
+
+    const status = JSON.parse(text(await callTool(api, "get_submission_status", { submissionId: "sub_1" })));
+    expect(status).toMatchObject({ bountyState: "REFUNDED" });
+    expect(status.nextStep).toMatch(/refunded/);
   });
 
   it("surfaces API errors as tool errors", async () => {

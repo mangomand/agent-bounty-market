@@ -28,7 +28,7 @@ import { privateKeyToAccount } from "viem/accounts";
 /**
  * Everything the API does onchain. The relayer key only pays gas for `submitCode` and
  * `submitReceipt`, which anyone may call; it holds no role and cannot move bounty funds.
- * Payout happens only in `acceptSubmission`, which the contract restricts to the creator.
+ * Payout happens only in `acceptSubmission` and refunds only in `refund`; the contract restricts both to the creator.
  */
 export interface ChainClient {
   readonly chainId: number;
@@ -41,6 +41,8 @@ export interface ChainClient {
   submissionState(onchainId: string): Promise<WorkflowState>;
   /** Checks the tx paid out `submissionOnchainId` from this contract. */
   verifyPayout(txHash: Hex, submissionOnchainId: string): Promise<{ to: Hex; amount: bigint; from: Hex }>;
+  /** Reads BountyRefunded for `bountyOnchainId` from the creator's refund tx. */
+  verifyRefund(txHash: Hex, bountyOnchainId: string): Promise<{ creator: Hex; amount: bigint; from: Hex }>;
 }
 
 export interface FundingExpectation {
@@ -189,6 +191,15 @@ export function createChainClient(cfg: ChainConfig): ChainClient {
       );
       if (!ev) throw new ChainError("transaction did not pay out this submission");
       return { to: ev.args.to as Hex, amount: ev.args.amount, from: r.from as Address as Hex };
+    },
+
+    async verifyRefund(txHash, bountyOnchainId) {
+      const r = await txReceipt(txHash);
+      const [ev] = parseEventLogs({ abi: bountyEscrowAbi, logs: r.logs, eventName: "BountyRefunded" }).filter(
+        (l) => sameAddr(l.address, address) && l.args.bountyId.toString() === bountyOnchainId,
+      );
+      if (!ev) throw new ChainError("transaction did not refund this bounty");
+      return { creator: ev.args.creator as Hex, amount: ev.args.amount, from: r.from as Address as Hex };
     },
   };
 }

@@ -116,9 +116,9 @@ describe.skipIf(!enabled)("end to end on Anvil", () => {
     anvil?.kill();
   });
 
-  async function postFundedBounty() {
+  async function postFundedBounty(deadlineIn = 3600) {
     const block = await pub.getBlock();
-    const deadline = Number(block.timestamp) + 3600;
+    const deadline = Math.max(Number(block.timestamp), Math.floor(Date.now() / 1000)) + deadlineIn;
     const specHash = `0x${createHash("sha256").update("slugify spec").digest("hex")}` as Hex;
     const testSuiteHash = `0x${createHash("sha256").update("slugify tests").digest("hex")}` as Hex;
     const amount = parseUnits("50", 6);
@@ -147,7 +147,7 @@ describe.skipIf(!enabled)("end to end on Anvil", () => {
     const funded = await req("POST", `/bounties/${b.body.bounty.id}/fund`, { txHash: fundTx });
     expect(funded.status).toBe(200);
     expect(funded.body.bounty.onchainId).toMatch(/^\d+$/);
-    return funded.body.bounty as { id: string; onchainId: string };
+    return funded.body.bounty as { id: string; onchainId: string; deadline: number };
   }
 
   const submit = async (bountyId: string, dir: string) => {
@@ -261,5 +261,47 @@ describe.skipIf(!enabled)("end to end on Anvil", () => {
     const after = await pub.readContract({ address: usdc, abi: mockUsdcAbi, functionName: "balanceOf", args: [PAYOUT] });
     expect(after - before).toBe(parseUnits("50", 6));
     expect(await onchainState(good.onchainId)).toBe(6); // Payout
+
+    // An awarded bounty can never be refunded.
+    expect((await req("GET", `/bounties/${bounty.id}`)).body.bounty.canRefund).toBe(false);
+    await expect(
+      pub.simulateContract({ account: creator.account, address: escrow, abi: bountyEscrowAbi, functionName: "refund", args: [BigInt(bounty.onchainId)] }),
+    ).rejects.toThrow(/BountyNotOpen/);
   }, 300_000);
+
+  it("refunds the creator after the deadline and mirrors REFUNDED", async () => {
+    const bounty = await postFundedBounty(3);
+    const refund = () =>
+      creator.writeContract({ address: escrow, abi: bountyEscrowAbi, functionName: "refund", args: [BigInt(bounty.onchainId)] });
+
+    expect((await req("GET", `/bounties/${bounty.id}`)).body.bounty.canRefund).toBe(false);
+    await expect(
+      pub.simulateContract({ account: creator.account, address: escrow, abi: bountyEscrowAbi, functionName: "refund", args: [BigInt(bounty.onchainId)] }),
+    ).rejects.toThrow(/DeadlineNotReached/);
+
+    // Real time, not evm_increaseTime: the API's clock and Anvil's block time must agree.
+    while (Math.floor(Date.now() / 1000) <= bounty.deadline) await new Promise((r) => setTimeout(r, 250));
+    expect((await req("GET", `/bounties/${bounty.id}`)).body.bounty.canRefund).toBe(true);
+
+    const before = await pub.readContract({ address: usdc, abi: mockUsdcAbi, functionName: "balanceOf", args: [creator.account.address] });
+    const refundTx = await refund();
+    const receipt = await pub.waitForTransactionReceipt({ hash: refundTx });
+    expect(parseEventLogs({ abi: bountyEscrowAbi, logs: receipt.logs, eventName: "BountyRefunded" })).toHaveLength(1);
+    const after = await pub.readContract({ address: usdc, abi: mockUsdcAbi, functionName: "balanceOf", args: [creator.account.address] });
+    expect(after - before).toBe(parseUnits("50", 6));
+
+    // A tx that did not refund this bounty is refused.
+    const fundTx = (await req("GET", `/bounties/${bounty.id}`)).body.bounty.fundTxHash as Hex;
+    expect((await req("POST", `/bounties/${bounty.id}/refund`, { creator: creator.account.address, txHash: fundTx })).status).toBe(422);
+
+    const recorded = await req("POST", `/bounties/${bounty.id}/refund`, { creator: creator.account.address, txHash: refundTx });
+    expect(recorded.status).toBe(200);
+    expect(recorded.body.bounty).toMatchObject({ state: "REFUNDED", refundTxHash: refundTx, canRefund: false });
+    const onchain = await pub.readContract({ address: escrow, abi: bountyEscrowAbi, functionName: "getBounty", args: [BigInt(bounty.onchainId)] });
+    expect(onchain.status).toBe(3); // Refunded
+
+    await expect(
+      pub.simulateContract({ account: creator.account, address: escrow, abi: bountyEscrowAbi, functionName: "refund", args: [BigInt(bounty.onchainId)] }),
+    ).rejects.toThrow(/BountyNotOpen/);
+  }, 60_000);
 });

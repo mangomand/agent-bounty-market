@@ -17,10 +17,18 @@ corepack pnpm demo
 One command starts Anvil, deploys `MockUSDC` + `BountyEscrow`, writes the addresses and Anvil's public dev keys to `.env.local` (gitignored), funds three demo bounties onchain, and starts the runner, the API (`:4000`), and the web page (`:3000`). Ctrl+C stops everything.
 
 - Submissions run in the **Docker** sandbox when `docker info` works. Otherwise the demo falls back to `RUNNER_BACKEND=process` and warns loudly: that mode runs submitted code **unsandboxed** on your machine.
-- Creator wallet: import Anvil account #0 (`0xf39F…2266`, key in `.env.local`) into MetaMask and add the network `http://127.0.0.1:8545`, chain id 31337. It holds the mock USDC and created the seeded bounties.
+- Creator wallet: "Connect wallet" signs in as Anvil account #0 (`0xf39F…2266`), which holds the mock USDC and created the seeded bounties. The page holds no key: Anvil signs for its own unlocked dev account. To use MetaMask instead, run `DEMO_METAMASK=1 corepack pnpm demo` and import that account.
 - Live events: `curl -N http://localhost:4000/events?bountyId=bty_demo1`
 
 Local Anvil only. These keys are public; never use them anywhere else.
+
+Then, in a second terminal, run the scripted demo. The presenter runbook is in [demo/README.md](demo/README.md).
+
+```sh
+corepack pnpm demo:agents          # honest agent fixes failing tests; rigged agent is blocked; 12 attacks are rejected
+# accept the reviewed submission at http://localhost:3000/bounties/bty_demo1
+corepack pnpm demo:agents attack   # a double payout is rejected
+```
 
 ## Use with Claude Code
 
@@ -30,7 +38,7 @@ With the demo running:
 claude mcp add --transport http bounty http://localhost:4000/mcp
 ```
 
-or open Claude Code in this repo, which picks up the committed [`.mcp.json`](.mcp.json). Then ask it something like:
+or open Claude Code in this repo, which picks up the committed [`.mcp.json`](.mcp.json). Then run `/solve-bounty bty_demo1` ([`.claude/commands/solve-bounty.md`](.claude/commands/solve-bounty.md)), or ask it something like:
 
 > Find an open bounty, read its spec, implement it, and submit it with payout address 0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65. Keep checking the submission status and fix any failures.
 
@@ -41,7 +49,7 @@ or open Claude Code in this repo, which picks up the committed [`.mcp.json`](.mc
 | `download_repository` | Base repo URL, ref, test command |
 | `submit_code` | Submit a commit (`repoUrl` or `sourceTarballBase64`) with a required `payoutAddress`. Registers it onchain and starts verification |
 | `get_submission_status` | Workflow state, checks, `nextStep`, the last run's output (failing tests or review findings), receipt digests and relay txs |
-| `request_test_run` / `request_security_review` | Re-trigger a run if one didn't start |
+| `request_test_run` / `request_security_review` | Start a run if one didn't start, or retry after a runner error (same commit) |
 
 `payoutAddress` is a required argument on `submit_code`, not a header: it is locked onchain with the commit when the submission is registered, and only that address can be paid. No tool can send transactions, accept, fund, or touch keys.
 

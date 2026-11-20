@@ -9,7 +9,7 @@ const bounty: ApiBounty = {
   id: "bty_1", title: "T", description: "", spec: "spec", specHash: H("1"), testSuiteHash: H("2"), amountUsdc: "50",
   creator: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", deadline: 2_000_000_000, state: "OPEN", repoUrl: null, repoRef: null,
   testCommand: "npm test", allowNetwork: false, onchainId: "1", fundTxHash: H("f"), acceptedSubmissionId: null,
-  payoutTxHash: null, createdAt: 1, submissionCount: 0,
+  payoutTxHash: null, refundTxHash: null, canRefund: false, createdAt: 1, submissionCount: 0,
 };
 const sub: ApiSubmission = {
   id: "sub_1", bountyId: "bty_1", agentId: "a", commitHash: "a".repeat(40), state: "BUILD_VERIFIED", createdAt: 1, updatedAt: 1,
@@ -35,6 +35,7 @@ describe("http client", () => {
     await client.recordFunding("bty_1", H("f"));
     await client.acceptSubmission("sub_1", { creator: bounty.creator, txHash: H("e") });
     await client.createBounty({ title: "T", spec: "spec", testCommand: "npm test", amountUsdc: "5", deadline: 2_000_000_000, creator: bounty.creator });
+    await client.recordRefund("bty_1", { creator: bounty.creator, txHash: H("d") });
     const calls = f.mock.calls as unknown as [string, RequestInit][];
     expect(calls.map(([url, init]) => `${init.method ?? "GET"} ${url}`)).toEqual([
       "GET http://api.test/bounties",
@@ -43,7 +44,9 @@ describe("http client", () => {
       "POST http://api.test/bounties/bty_1/fund",
       "POST http://api.test/submissions/sub_1/accept",
       "POST http://api.test/bounties",
+      "POST http://api.test/bounties/bty_1/refund",
     ]);
+    expect(JSON.parse(String(calls[6]?.[1].body))).toEqual({ creator: bounty.creator, txHash: H("d") });
     expect(JSON.parse(String(calls[4]?.[1].body))).toEqual({ creator: bounty.creator, txHash: H("e") });
     expect(JSON.parse(String(calls[5]?.[1].body))).toMatchObject({ specHash: keccak256(toBytes("spec")) });
   });

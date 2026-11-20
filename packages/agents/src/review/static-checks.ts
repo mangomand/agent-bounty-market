@@ -28,7 +28,12 @@ interface Rule {
   pattern: RegExp;
   /** Test files legitimately use some APIs (fs fixtures); lower the severity there. */
   testSeverity?: Severity;
+  /** Only applies to paths matching this. Default: every scanned file. */
+  files?: RegExp;
 }
+
+const PACKAGE_JSON = /(?:^|\/)package\.json$/;
+const TEST_PATH = /(?:^|\/)(?:test|tests|__tests__)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 export const STATIC_RULES: readonly Rule[] = [
   {
@@ -69,7 +74,43 @@ export const STATIC_RULES: readonly Rule[] = [
     id: "install-script",
     severity: "high",
     message: "npm install hook runs code on install",
-    pattern: /"(?:pre|post)?install"\s*:/,
+    pattern: /"(?:(?:pre|post)?install|(?:pre|post)?prepare|prepublish)"\s*:/,
+    files: PACKAGE_JSON,
+  },
+  {
+    // The sandbox only sees the test command's exit code, so `|| true` turns failing tests into a "pass" receipt.
+    id: "masked-test-script",
+    severity: "high",
+    message: "test script can exit 0 while tests fail",
+    pattern:
+      /"test"\s*:\s*"(?:[^"\\]|\\.)*(?:\|\|\s*(?:true|exit\s+0|:|echo\b)|;\s*exit\s+0\b|--passWithNoTests|--forceExit)|"test"\s*:\s*"\s*(?:true|exit\s+0|:|echo\b)/,
+    files: PACKAGE_JSON,
+  },
+  {
+    id: "skipped-test",
+    severity: "high",
+    message: "skips tests",
+    pattern: /\b(?:test|it|describe)\.(?:skip|todo)\s*\(|\b(?:xit|xdescribe|xtest)\s*\(|\{\s*skip\s*:\s*true/,
+    files: TEST_PATH,
+  },
+  {
+    id: "focused-test",
+    severity: "high",
+    message: "runs only some tests",
+    pattern: /\b(?:test|it|describe)\.only\s*\(/,
+    files: TEST_PATH,
+  },
+  {
+    id: "embedded-key",
+    severity: "high",
+    message: "contains what looks like a private or API key",
+    pattern: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9]{30,}\b/,
+  },
+  {
+    id: "obfuscated",
+    severity: "medium",
+    message: "contains an encoded or obfuscated blob",
+    pattern: /["'`][A-Za-z0-9+/=]{200,}["'`]|(?:\\x[0-9a-fA-F]{2}){20,}/,
   },
   {
     id: "symlink",
@@ -86,10 +127,9 @@ export const STATIC_RULES: readonly Rule[] = [
 ];
 
 const CODE_EXT = /\.(?:[cm]?[jt]sx?|json|sh|py)$/;
-const TEST_FILE = /(?:^|\/)(?:test|tests|__tests__)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 export function isTestFile(path: string): boolean {
-  return TEST_FILE.test(path);
+  return TEST_PATH.test(path);
 }
 
 /** Runs every static rule over every code file. Comments are scanned too: hiding a call in one is no defence. */
@@ -101,6 +141,7 @@ export function staticChecks(files: readonly SourceFile[]): Finding[] {
     const inTest = isTestFile(f.path);
     f.content.split("\n").forEach((text, i) => {
       for (const rule of STATIC_RULES) {
+        if (rule.files && !rule.files.test(f.path)) continue;
         if (!rule.pattern.test(text)) continue;
         findings.push({
           source: "static",

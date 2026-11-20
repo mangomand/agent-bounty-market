@@ -8,8 +8,10 @@ import { ErrorNote, Loading } from "@/components/state";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { formatRelative, formatUsdc } from "@/lib/format";
+import { useLiveEvents } from "@/lib/use-live-events";
 
 export default function BountiesPage() {
+  useLiveEvents();
   const bounties = useQuery({ queryKey: ["bounties"], queryFn: () => api().listBounties() });
 
   return (

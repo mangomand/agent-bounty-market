@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -32,6 +33,45 @@ describe("static checks", () => {
     ["fs-escape", `join(os.homedir(), ".ssh")`],
   ])("flags %s in %s", (rule, code) => {
     expect(rules(code)).toContain(rule);
+  });
+
+  it.each([
+    ["masked-test-script", `"test": "node --test || true"`],
+    ["masked-test-script", `"test": "node --test; exit 0"`],
+    ["masked-test-script", `"test": "echo ok"`],
+    ["masked-test-script", `"test": "vitest run --passWithNoTests"`],
+    ["install-script", `"postinstall": "node x.js"`],
+    ["install-script", `"prepare": "node x.js"`],
+  ])("flags %s in package.json: %s", (rule, line) => {
+    expect(rules(line, "package.json")).toContain(rule);
+  });
+
+  it("allows an honest test script, and ignores test-script text outside package.json", () => {
+    expect(rules(`"test": "node --test"`, "package.json")).toEqual([]);
+    expect(rules(`"test": "node --test || true"`, "src/notes.js")).toEqual([]);
+  });
+
+  it.each([
+    ["skipped-test", `test.skip("slugifies", () => {})`],
+    ["skipped-test", `it("x", { skip: true }, () => {})`],
+    ["focused-test", `describe.only("slugify", () => {})`],
+  ])("flags %s in test files only: %s", (rule, code) => {
+    expect(rules(code, "test/slugify.test.js")).toContain(rule);
+    expect(rules(code, "src/slugify.js")).not.toContain(rule);
+  });
+
+  it("flags embedded keys", () => {
+    expect(rules(`const k = "-----BEGIN PRIVATE KEY-----"`)).toContain("embedded-key");
+    expect(rules(`const k = "sk-abcdefghijklmnopqrstuvwxyz"`)).toContain("embedded-key");
+  });
+
+  it("fails the rigged demo fixture", async () => {
+    const dir = fileURLToPath(new URL("../../../../demo/fixtures/slugify-rigged", import.meta.url));
+    const r = await reviewSource(await readSourceTree(dir));
+    expect(r.pass).toBe(false);
+    expect(r.findings.map((f) => f.rule)).toContain("masked-test-script");
+    const good = fileURLToPath(new URL("../../../../demo/fixtures/slugify-good", import.meta.url));
+    expect((await reviewSource(await readSourceTree(good))).pass).toBe(true);
   });
 
   it("passes clean code", () => {

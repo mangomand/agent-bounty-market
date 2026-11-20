@@ -57,6 +57,20 @@ export async function fundBounty(args: FundBountyArgs): Promise<Hex> {
   );
 }
 
+/** Returns the escrow to the creator. The contract allows it only after the deadline, with no accepted submission. */
+export async function refundBounty(bountyOnchainId: string): Promise<Hex> {
+  if (config.mock) return mockTx("refund");
+  const { bounty } = addresses();
+  return send(
+    await writeContract(wagmiConfig, {
+      address: bounty,
+      abi: bountyEscrowAbi,
+      functionName: "refund",
+      args: [BigInt(bountyOnchainId)],
+    }),
+  );
+}
+
 /** CREATOR_ACCEPTED → PAYOUT in one tx: the contract pays the submitter. Returns the tx hash. */
 export async function acceptSubmission(submissionOnchainId: string): Promise<Hex> {
   if (config.mock) return mockTx("accept");

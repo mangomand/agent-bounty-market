@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { parseUnits } from "viem";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createServer as createMcpServer, httpApi } from "@abm/mcp";
 import {
@@ -15,6 +16,7 @@ import {
   type Hex,
   idSchema,
   postReceiptsSchema,
+  refundBountySchema,
   requestRunSchema,
   type ApiBounty,
   type ApiEvent,
@@ -97,7 +99,7 @@ export function createApp(opts: AppOptions) {
     const row = db.prepare("SELECT * FROM bounties WHERE id = ?").get(id);
     if (!row) return null;
     const { n } = db.prepare("SELECT COUNT(*) AS n FROM submissions WHERE bounty_id = ?").get(id) as { n: number };
-    return toBounty(row, Number(n));
+    return toBounty(row, Number(n), now());
   };
   const mustBounty = (id: string) => {
     const b = getBounty(id);
@@ -217,9 +219,10 @@ export function createApp(opts: AppOptions) {
 
   const setChecks = (sub: ApiSubmission, kind: RunKind, status: "running" | "error") => {
     const cols = kind === "test" ? ["build", "test"] : ["security"];
+    // Only touch checks without a result yet; a retry also restarts checks the runner errored on.
+    const from = status === "running" ? "('pending','running','error')" : "('pending','running')";
     for (const col of cols) {
-      // Only touch checks that have not produced a result yet.
-      db.prepare(`UPDATE submissions SET ${col}_status = ?, updated_at = ? WHERE id = ? AND ${col}_status IN ('pending','running')`)
+      db.prepare(`UPDATE submissions SET ${col}_status = ?, updated_at = ? WHERE id = ? AND ${col}_status IN ${from}`)
         .run(status, now(), sub.id);
     }
     emit({ type: "submission.updated", bountyId: sub.bountyId, submission: mustSubmission(sub.id) });
@@ -232,7 +235,8 @@ export function createApp(opts: AppOptions) {
       throw new HttpError(409, "out_of_order", `${kind} run requires state ${RUN_REQUIRES[kind]}, submission is ${sub.state}`);
     if (db.prepare("SELECT 1 FROM runs WHERE submission_id = ? AND kind = ? AND status = 'running'").get(sub.id, kind))
       throw new HttpError(409, "run_in_progress", `a ${kind} run is already in progress`);
-    if (kind === "test" && sub.checks.build !== "pending")
+    // A runner error (not a failing test) can be retried on the same commit.
+    if (kind === "test" && !["pending", "error"].includes(sub.checks.build))
       throw new HttpError(409, "already_run", "this submission was already tested; submit a new commit");
 
     const runId = newId("run");
@@ -360,6 +364,37 @@ export function createApp(opts: AppOptions) {
     }
     const bounty = mustBounty(b.id);
     emit({ type: "bounty.updated", bountyId: b.id, bounty });
+    return c.json({ bounty });
+  });
+
+  /**
+   * Records the creator's onchain refund. The creator's wallet already sent `refund`; the API reads
+   * BountyRefunded from the tx itself. Offchain (no chain), it applies the contract's own rule.
+   */
+  app.post("/bounties/:id/refund", async (c) => {
+    const id = bountyId(c);
+    const body = parse(refundBountySchema, await jsonBody(c));
+    const pre = mustBounty(id);
+    if (body.creator.toLowerCase() !== pre.creator.toLowerCase())
+      throw new HttpError(403, "not_creator", "only the bounty creator can refund");
+    if (pre.state !== "OPEN") throw new HttpError(409, "bounty_closed", `bounty is ${pre.state}`);
+    if (!pre.onchainId) throw new HttpError(409, "not_funded", "bounty is not funded onchain");
+    if (chain) {
+      const refunded = await chainCall(() => chain.verifyRefund(body.txHash, pre.onchainId!));
+      if (refunded.from.toLowerCase() !== pre.creator.toLowerCase() || refunded.creator.toLowerCase() !== pre.creator.toLowerCase())
+        throw new HttpError(403, "not_creator", "refund tx was not sent by the bounty creator");
+      if (refunded.amount !== parseUnits(pre.amountUsdc, 6))
+        throw new HttpError(422, "onchain_mismatch", "refunded amount does not match the bounty");
+    } else if (!pre.canRefund) {
+      throw new HttpError(409, "deadline_not_reached", "a bounty can only be refunded after its deadline");
+    }
+    const bounty = tx(() => {
+      const b = mustBounty(id);
+      if (b.state !== "OPEN") throw new HttpError(409, "bounty_closed", `bounty is ${b.state}`);
+      db.prepare("UPDATE bounties SET state = 'REFUNDED', refund_tx_hash = ? WHERE id = ?").run(body.txHash, b.id);
+      return mustBounty(b.id);
+    });
+    emit({ type: "bounty.updated", bountyId: bounty.id, bounty });
     return c.json({ bounty });
   });
 

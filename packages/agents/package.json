@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "start": "tsx --env-file-if-exists=../../.env.local src/cli.ts",
+    "demo": "tsx --env-file-if-exists=../../.env.local src/demo.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@abm/runner": "workspace:*",
     "@abm/shared": "workspace:*",
     "@anthropic-ai/sdk": "^1.11.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
