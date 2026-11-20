@@ -13,11 +13,17 @@ const FOUNDRY_BIN = join(homedir(), ".foundry/bin");
 const env0 = { ...process.env, PATH: `${FOUNDRY_BIN}:${process.env.PATH}` };
 const TSX = join(ROOT, "node_modules/.bin/tsx");
 
-const RPC_PORT = 8545;
+// DEMO_PORT_OFFSET=10 runs a second demo alongside the first (8555, 4010, 4110, 3010).
+const OFFSET = Number(process.env.DEMO_PORT_OFFSET ?? 0);
+if (!Number.isInteger(OFFSET) || OFFSET < 0 || OFFSET > 900) {
+  console.error("DEMO_PORT_OFFSET must be an integer from 0 to 900");
+  process.exit(1);
+}
+const RPC_PORT = 8545 + OFFSET;
 const RPC_URL = `http://127.0.0.1:${RPC_PORT}`;
-const API_PORT = 4000;
-const RUNNER_PORT = 4100;
-const WEB_PORT = 3000;
+const API_PORT = 4000 + OFFSET;
+const RUNNER_PORT = 4100 + OFFSET;
+const WEB_PORT = 3000 + OFFSET;
 
 // Anvil's default accounts (public, from the "test test ... junk" mnemonic).
 const ANVIL = [
@@ -217,6 +223,7 @@ console.log(
     `  Payout address for agents: Anvil account #4 ${DEV[0]}`,
     "",
     color("1", "  Demo script (in another terminal):"),
+    ...(OFFSET ? [`    export API_PORT=${API_PORT}`] : []),
     "    corepack pnpm demo:agents          honest agent fixes failing tests; rigged agent is blocked; attacks are rejected",
     `    then accept the reviewed submission at http://localhost:${WEB_PORT}/bounties/bty_demo1`,
     "    corepack pnpm demo:agents attack   rerun after the payout to show a double payout is rejected",
