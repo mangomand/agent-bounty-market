@@ -9,6 +9,7 @@ import { useState } from "react";
 import { useAccount } from "wagmi";
 import { BountyStateBadge } from "@/components/bounty-state-badge";
 import { CheckPill } from "@/components/check-pill";
+import { RefundPanel } from "@/components/refund-panel";
 import { ErrorNote, Loading } from "@/components/state";
 import { TxLink } from "@/components/tx-link";
 import { Badge } from "@/components/ui/badge";
@@ -127,6 +128,7 @@ function BountyHeader({ bounty }: { bounty: BountyView }) {
             {bounty.spec}
           </pre>
         </details>
+        <RefundPanel bounty={bounty} />
       </CardContent>
     </Card>
   );

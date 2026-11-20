@@ -184,6 +184,15 @@ export function createMockClient(now: () => number = Date.now): ApiClient {
       bounty.state = "AWARDED";
       return delay(advance(sub), 400);
     },
+    recordRefund: async (bountyId, input) => {
+      const bounty = findBounty(bountyId);
+      if (bounty.state !== "OPEN") throw new ApiError("Bounty is already settled", 409);
+      if (bounty.deadline * 1000 >= now()) throw new ApiError("A bounty can only be refunded after its deadline", 409);
+      bounty.state = "REFUNDED";
+      bounty.refundTx = input.txHash;
+      bounty.canRefund = false;
+      return delay(bounty, 400);
+    },
   };
 }
 
