@@ -54,3 +54,4 @@ export function nextState(current: WorkflowState): WorkflowState | null {
 export function isValidTransition(from: WorkflowState, to: WorkflowState): boolean {
   return nextState(from) === to;
 }
+export * from "./api";
